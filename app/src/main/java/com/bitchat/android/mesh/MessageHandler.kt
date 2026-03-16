@@ -7,6 +7,7 @@ import com.bitchat.android.model.IdentityAnnouncement
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.protocol.DisasterReportPayload
 import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.*
 import java.util.*
@@ -366,6 +367,11 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         
         val recipientID = packet.recipientID?.takeIf { !it.contentEquals(delegate?.getBroadcastRecipient()) }
         
+        if (packet.type == MessageType.DISASTER_REPORT.value) {
+            handleDisasterReport(routed)
+            return
+        }
+
         if (recipientID == null) {
             // BROADCAST MESSAGE
             handleBroadcastMessage(routed)
@@ -477,7 +483,49 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         }
     }
 
-    
+    /**
+     * Handle structured disaster report
+     */
+    private fun handleDisasterReport(routed: RoutedPacket) {
+        val packet = routed.packet
+        val peerID = routed.peerID ?: "unknown"
+
+        val report = DisasterReportPayload.decode(packet.payload)
+        if (report != null) {
+            Log.d(TAG, "📢 Received Disaster Report from $peerID: Severity=${report.severity}, Msg=${report.otherMessage}")
+
+            // 1. Notify UI/Flutter
+            val message = BitchatMessage(
+                id = report.messageID,
+                sender = delegate?.getPeerNickname(peerID) ?: peerID,
+                content = "[DISASTER REPORT] Severity: ${report.severity}\nLocation: ${report.latitude}, ${report.longitude}\nHealth: C=${report.health.consciousness}, B=${report.health.bleeding}, R=${report.health.breathing}\nNote: ${report.otherMessage}",
+                senderPeerID = peerID,
+                timestamp = Date(report.timestamp)
+            )
+            delegate?.onMessageReceived(message)
+
+            // 2. BACKEND CONCEPT: Automatic upload to management center if network is available
+            uploadToManagementCenter(report)
+        }
+    }
+
+    private fun uploadToManagementCenter(report: DisasterReportPayload) {
+        handlerScope.launch {
+            // Check network availability (simplified)
+            val cm = appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+            val network = cm?.activeNetwork
+            val caps = cm?.getNetworkCapabilities(network)
+            val hasInternet = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+
+            if (hasInternet) {
+                Log.d(TAG, "🌐 Internet available, uploading disaster report ${report.messageID} to management center")
+                // TODO: Implement actual HTTP upload to your management center
+                // Example: use OkHttp to POST the report JSON or binary
+            } else {
+                Log.d(TAG, "📵 No internet, report ${report.messageID} will wait for relay or manual upload")
+            }
+        }
+    }
     
     /**
      * Handle leave message

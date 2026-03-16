@@ -42,6 +42,8 @@ import com.bitchat.android.ui.OrientationAwareActivity
 import com.bitchat.android.ui.theme.BitchatTheme
 import com.bitchat.android.nostr.PoWPreferenceManager
 import com.bitchat.android.services.VerificationService
+import com.bitchat.android.protocol.DisasterReportPayload
+import com.bitchat.android.protocol.HealthAssessment
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -65,6 +67,8 @@ class MainActivity : OrientationAwareActivity() {
         }
     }
     
+    private val CHANNEL = "com.bitchat.android/disaster_report"
+
     private val forceFinishReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
             if (intent.action == com.bitchat.android.util.AppConstants.UI.ACTION_FORCE_FINISH) {

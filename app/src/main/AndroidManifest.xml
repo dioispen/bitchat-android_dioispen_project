@@ -103,6 +103,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Flutter UI (聊天室 Demo) 的承載 Activity -->
+        <activity
+            android:name=".flutter.FlutterChatActivity"
+            android:exported="false"
+            android:theme="@style/Theme.BitchatAndroid"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- Persistent foreground service to run the mesh in background -->
         <service
             android:name=".service.MeshForegroundService"

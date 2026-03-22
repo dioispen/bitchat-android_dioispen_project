@@ -150,4 +150,7 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.bundles.compose.testing)
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    //flutter
+    implementation(project(":flutter"))
 }

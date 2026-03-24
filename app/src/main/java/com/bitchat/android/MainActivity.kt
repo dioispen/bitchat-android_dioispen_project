@@ -90,6 +90,13 @@ class MainActivity : FlutterFragmentActivity() {
         if (!::permissionManager.isInitialized) {
             permissionManager = PermissionManager(this)
         }
+        
+        // Initialize Tor provider to ensure proxy is available for Nostr relays
+        try {
+            com.bitchat.android.net.ArtiTorManager.getInstance().init(application)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to initialize ArtiTorManager: ${e.message}")
+        }
     }
 
     private fun setOrientationBasedOnDeviceType() {
@@ -286,6 +293,14 @@ class MainActivity : FlutterFragmentActivity() {
     private fun initializeApp() {
         lifecycleScope.launch {
             try {
+                // Ensure Tor is started before initializing components that depend on network/Tor
+                val torManager = com.bitchat.android.net.ArtiTorManager.getInstance()
+                torManager.init(application)
+                if (com.bitchat.android.net.TorPreferenceManager.get(this@MainActivity) == com.bitchat.android.net.TorMode.ON) {
+                    Log.i("MainActivity", "Starting Tor proxy...")
+                    torManager.applyMode(application, com.bitchat.android.net.TorMode.ON)
+                }
+
                 delay(1000)
                 com.bitchat.android.nostr.PoWPreferenceManager.init(this@MainActivity)
                 com.bitchat.android.nostr.LocationNotesInitializer.initialize(this@MainActivity)

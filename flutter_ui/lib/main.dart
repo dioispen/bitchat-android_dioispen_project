@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'bridge/bitchat_bridge.dart';
 import 'ui/onboarding_screen.dart';
-import 'ui/chat_demo_screen.dart';
+import 'screens/home_screen.dart';
+import 'screens/register_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,17 +22,39 @@ class BitchatFlutterUiApp extends StatefulWidget {
 class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   Map<String, dynamic> _onboardingState = {'state': 'CHECKING'};
   StreamSubscription? _subscription;
+  bool _isUserRegistered = false;
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    // 監聽來自 Native 的所有事件
+    _initApp();
+    
     _subscription = BitchatBridge.events().listen((event) {
       if (event['type'] == 'onboardingStateChanged') {
         setState(() {
           _onboardingState = event;
         });
+        // 當 Native 完成時，重新檢查註冊狀態以確保導向正確頁面
+        if (event['state'] == 'COMPLETE') {
+          _checkUserRegistration();
+        }
       }
+    });
+  }
+
+  Future<void> _initApp() async {
+    await _checkUserRegistration();
+    setState(() {
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _checkUserRegistration() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userRaw = prefs.getString('app_user');
+    setState(() {
+      _isUserRegistered = userRaw != null;
     });
   }
 
@@ -41,28 +66,30 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
 
   @override
   Widget build(BuildContext context) {
-    final isComplete = _onboardingState['state'] == 'COMPLETE';
+    if (_isLoading) {
+      return const MaterialApp(
+        home: Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+
+    final isNativeComplete = _onboardingState['state'] == 'COMPLETE';
 
     return MaterialApp(
       title: 'Bitchat',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4A90E2),
+          seedColor: const Color(0xFF5C3D2E), // 使用與 RegisterScreen 相同的棕色調
           brightness: Brightness.light,
         ),
         useMaterial3: true,
       ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4A90E2),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-      ),
-      // 根據狀態切換根頁面
-      home: isComplete 
-          ? const ChatDemoScreen() 
+      // 邏輯流：
+      // 1. Native Onboarding 未完成 -> 顯示 OnboardingScreen
+      // 2. Native 完成但未註冊 -> 顯示 RegisterScreen
+      // 3. 全部完成 -> 顯示 HomeScreen
+      home: isNativeComplete 
+          ? (_isUserRegistered ? const HomeScreen() : const RegisterScreen())
           : OnboardingScreen(initialState: _onboardingState),
     );
   }

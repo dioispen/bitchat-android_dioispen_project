@@ -97,7 +97,7 @@ class BitchatFlutterChannels(
             "type" to "messageReceived",
             "message" to mapOf(
                 "id" to message.id,
-                "text" to message.text,
+                "text" to message.content,
                 "senderId" to message.senderPeerID,
                 "timestamp" to message.timestamp,
                 "isPrivate" to message.isPrivate

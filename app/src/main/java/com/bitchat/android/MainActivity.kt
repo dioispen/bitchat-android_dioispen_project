@@ -12,13 +12,14 @@ import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.mesh.BluetoothMeshService
 import com.bitchat.android.onboarding.*
 import com.bitchat.android.utils.DeviceUtils
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import android.content.pm.ActivityInfo
+import androidx.core.content.ContextCompat
 
-class MainActivity : FlutterActivity() {
+class MainActivity : FlutterFragmentActivity() {
 
     private lateinit var permissionManager: PermissionManager
     private lateinit var onboardingCoordinator: OnboardingCoordinator
@@ -29,7 +30,7 @@ class MainActivity : FlutterActivity() {
     private lateinit var meshService: BluetoothMeshService
     private lateinit var identityManager: SecureIdentityStateManager
     private val mainViewModel: MainViewModel by viewModels()
-
+    
     private var channels: BitchatFlutterChannels? = null
 
     private val forceFinishReceiver = object : android.content.BroadcastReceiver() {
@@ -43,15 +44,17 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setOrientationBasedOnDeviceType()
-
-        // Register receiver for force finish signal
+        
+        // Register receiver for force finish signal with proper flags
         val filter = android.content.IntentFilter(com.bitchat.android.util.AppConstants.UI.ACTION_FORCE_FINISH)
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(forceFinishReceiver, filter, com.bitchat.android.util.AppConstants.UI.PERMISSION_FORCE_FINISH, null, android.content.Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(forceFinishReceiver, filter, com.bitchat.android.util.AppConstants.UI.PERMISSION_FORCE_FINISH, null)
-        }
+        ContextCompat.registerReceiver(
+            this, 
+            forceFinishReceiver, 
+            filter, 
+            com.bitchat.android.util.AppConstants.UI.PERMISSION_FORCE_FINISH, 
+            null, 
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         
         if (intent.getBooleanExtra("ACTION_QUIT_APP", false)) {
             finish()
@@ -60,20 +63,13 @@ class MainActivity : FlutterActivity() {
 
         com.bitchat.android.service.AppShutdownCoordinator.cancelPendingShutdown()
         
-        // Initialize Core Logic
-        permissionManager = PermissionManager(this)
-        identityManager = SecureIdentityStateManager(this)
-
+        ensureDependenciesInitialized()
         try { com.bitchat.android.service.MeshForegroundService.start(applicationContext) } catch (_: Exception) { }
-        meshService = com.bitchat.android.service.MeshServiceHolder.getOrCreate(applicationContext)
-
         initStatusManagers()
         
-        // Collect state changes and sync to Flutter
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                mainViewModel.onboardingState.collect { state ->
-                    handleOnboardingStateChange(state)
+                mainViewModel.onboardingState.collect {
                     syncStateToFlutter()
                 }
             }
@@ -81,6 +77,18 @@ class MainActivity : FlutterActivity() {
 
         if (mainViewModel.onboardingState.value == OnboardingState.CHECKING) {
             checkOnboardingStatus()
+        }
+    }
+
+    private fun ensureDependenciesInitialized() {
+        if (!::identityManager.isInitialized) {
+            identityManager = SecureIdentityStateManager(this)
+        }
+        if (!::meshService.isInitialized) {
+            meshService = com.bitchat.android.service.MeshServiceHolder.getOrCreate(applicationContext)
+        }
+        if (!::permissionManager.isInitialized) {
+            permissionManager = PermissionManager(this)
         }
     }
 
@@ -94,8 +102,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        ensureDependenciesInitialized()
         channels = BitchatFlutterChannels(flutterEngine.dartExecutor.binaryMessenger, meshService, identityManager)
-
         channels?.onActionRequested = { action, params ->
             handleFlutterAction(action, params)
         }
@@ -150,10 +158,6 @@ class MainActivity : FlutterActivity() {
         onboardingCoordinator = OnboardingCoordinator(this, permissionManager, ::handleOnboardingComplete, {
             mainViewModel.updateOnboardingState(OnboardingState.BACKGROUND_LOCATION_EXPLANATION)
         }, ::handleOnboardingFailed)
-    }
-
-    private fun handleOnboardingStateChange(state: OnboardingState) {
-        Log.d("MainActivity", "State changed to: $state")
     }
 
     private fun checkOnboardingStatus() {

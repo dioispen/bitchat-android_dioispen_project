@@ -38,7 +38,7 @@ class _ChatDemoScreenState extends State<ChatDemoScreen> {
     });
 
     // Best-effort: start native layer (Android/iOS 可自行決定要不要實作)
-    unawaited(BitchatBridge.start());
+    //unawaited(BitchatBridge.start());
   }
 
   @override

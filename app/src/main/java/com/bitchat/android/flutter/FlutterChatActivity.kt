@@ -1,6 +1,8 @@
 package com.bitchat.android.flutter
 
 import android.os.Bundle
+import com.bitchat.android.identity.SecureIdentityStateManager
+import com.bitchat.android.service.MeshServiceHolder
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 
@@ -23,12 +25,29 @@ class FlutterChatActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
+        // 取得 meshService 與 identityManager
+        val meshService = MeshServiceHolder.getOrCreate(applicationContext)
+        val identityManager = SecureIdentityStateManager(applicationContext)
+
         // 這行就是「Kotlin 端把 Channel 綁到 Flutter engine」的地方
         // flutterEngine.dartExecutor.binaryMessenger 就是 messenger（通訊管道的底層）
-        channels = BitchatFlutterChannels(flutterEngine.dartExecutor.binaryMessenger)
+        channels = BitchatFlutterChannels(
+            flutterEngine.dartExecutor.binaryMessenger,
+            meshService,
+            identityManager
+        )
 
-        // TODO: 你也可以把 app 的 mesh service / viewmodel / repository 注入進 channels，
-        //       讓 channels 真的去呼叫 send/start/stop 等功能。
+        // 處理來自 Flutter 的請求
+        channels?.onActionRequested = { action, params ->
+            when (action) {
+                "enableBluetooth" -> {
+                    // TODO: 請求藍牙權限或開啟藍牙
+                }
+                "requestPermissions" -> {
+                    // TODO: 請求必要權限
+                }
+            }
+        }
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
@@ -37,4 +56,3 @@ class FlutterChatActivity : FlutterActivity() {
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }
-

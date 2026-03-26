@@ -1,16 +1,9 @@
 import 'dart:async';
-
 import 'package:flutter/services.dart';
 
-/// Flutter <-> Native 橋接（只共用 UI 的最小骨架）
-///
-/// - MethodChannel: Flutter 發指令給 Native（send/start/stop...）
-/// - EventChannel: Native 推事件給 Flutter（訊息/狀態/peer list...）
 class BitchatBridge {
-  static const MethodChannel _method =
-      MethodChannel('com.bitchat/bridge/methods');
-  static const EventChannel _events =
-      EventChannel('com.bitchat/bridge/events');
+  static const MethodChannel _method = MethodChannel('com.bitchat/bridge/methods');
+  static const EventChannel _events = EventChannel('com.bitchat/bridge/events');
 
   static Stream<Map<String, dynamic>> events() {
     return _events.receiveBroadcastStream().map((dynamic e) {
@@ -21,18 +14,68 @@ class BitchatBridge {
     });
   }
 
-  static Future<void> start() => _method.invokeMethod<void>('start');
+  /// 檢查是否已註冊
+  static Future<bool> isRegistered() async {
+    try {
+      final bool? result = await _method.invokeMethod<bool>('isRegistered');
+      return result ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
 
-  static Future<void> stop() => _method.invokeMethod<void>('stop');
+  /// 執行註冊（產生原生密鑰並儲存暱稱）
+  static Future<bool> register({required String nickname}) async {
+    try {
+      final bool? result = await _method.invokeMethod<bool>('register', {
+        'nickname': nickname,
+      });
+      return result ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
 
+  /// 獲取個人資料
+  static Future<Map<String, dynamic>?> getProfile() async {
+    try {
+      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getProfile');
+      return result?.map((k, v) => MapEntry(k.toString(), v));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// 啟動 Mesh 服務
+  static Future<bool> startMesh() async {
+    try {
+      final bool? result = await _method.invokeMethod<bool>('startMesh');
+      return result ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// 發送訊息
   static Future<void> sendMessage({
-    required String peerId,
+    String? peerId,
     required String text,
-  }) {
-    return _method.invokeMethod<void>('sendMessage', <String, dynamic>{
+    bool isPublic = true,
+  }) async {
+    await _method.invokeMethod<void>('sendMessage', <String, dynamic>{
       'peerId': peerId,
       'text': text,
+      'isPublic': isPublic,
     });
   }
-}
 
+  /// 獲取附近裝置
+  static Future<Map<String, String>> getNearbyPeers() async {
+    try {
+      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getNearbyPeers');
+      return result?.map((k, v) => MapEntry(k.toString(), v.toString())) ?? {};
+    } catch (e) {
+      return {};
+    }
+  }
+}

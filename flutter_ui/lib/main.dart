@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-
-import 'ui/chat_demo_screen.dart';
+import 'screens/setup_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,12 +13,13 @@ class BitchatFlutterUiApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Bitchat UI',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A90E2)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5C3D2E)),
         useMaterial3: true,
       ),
-      home: const ChatDemoScreen(),
+      // 將進入點改為 SetupScreen，負責初始化與導向
+      home: const SetupScreen(),
     );
   }
 }
-

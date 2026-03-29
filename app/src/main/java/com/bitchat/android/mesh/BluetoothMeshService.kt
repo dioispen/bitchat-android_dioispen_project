@@ -16,6 +16,7 @@ import com.bitchat.android.model.RequestSyncPacket
 import com.bitchat.android.sync.GossipSyncManager
 import com.bitchat.android.util.toHexString
 import com.bitchat.android.services.VerificationService
+import com.bitchat.android.net.PacketUplinkManager
 import kotlinx.coroutines.*
 import java.util.*
 import kotlin.math.sign
@@ -55,6 +56,10 @@ class BluetoothMeshService(private val context: Context) {
     internal val connectionManager = BluetoothConnectionManager(context, myPeerID, fragmentManager) // Made internal for access
     private val packetProcessor = PacketProcessor(myPeerID)
     private lateinit var gossipSyncManager: GossipSyncManager
+    
+    // Uplink manager for gateway functionality
+    private val uplinkManager = PacketUplinkManager(context)
+
     // Service-level notification manager for background (no-UI) DMs
     private val serviceNotificationManager = com.bitchat.android.ui.NotificationManager(
         context.applicationContext,
@@ -556,6 +561,9 @@ class BluetoothMeshService(private val context: Context) {
         // BluetoothConnectionManager delegates
         connectionManager.delegate = object : BluetoothConnectionManagerDelegate {
         override fun onPacketReceived(packet: BitchatPacket, peerID: String, device: android.bluetooth.BluetoothDevice?) {
+            // Uplink packet to server if internet is available (Gateway functionality)
+            uplinkManager.uplinkPacketIfNeeded(packet)
+
             // Log incoming for debug graphs (do not double-count anywhere else)
             try {
                 com.bitchat.android.ui.debug.DebugSettingsManager.getInstance().logIncoming(

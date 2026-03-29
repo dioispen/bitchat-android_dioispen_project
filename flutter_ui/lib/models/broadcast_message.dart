@@ -1,33 +1,55 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+/// 對應到原生 BitchatMessage.kt 的訊息格式
 class BroadcastMessage {
-  final String senderId;   // 發送者 ID（哪位市民送出）
-  final String content;    // 訊息內容（例如 "Hello World"）
-  final DateTime sentAt;   // 發送時間
-  final String type;       // 訊息類型（test / sos / report）
+  final String id;
+  final String sender;
+  final String content;
+  final DateTime timestamp;
+  final String? senderPeerID;
+  final String? channel;
+  final List<String>? mentions;
+  final bool isPrivate;
+  final bool isEncrypted;
 
   BroadcastMessage({
-    required this.senderId,
+    required this.id,
+    required this.sender,
     required this.content,
-    required this.sentAt,
-    required this.type,
+    required this.timestamp,
+    this.senderPeerID,
+    this.channel,
+    this.mentions,
+    this.isPrivate = false,
+    this.isEncrypted = false,
   });
 
-  // 轉成 Map，方便通訊組打包後傳送到管理端
   Map<String, dynamic> toMap() {
     return {
-      'senderId': senderId,
+      'id': id,
+      'sender': sender,
       'content': content,
-      'sentAt': sentAt.toIso8601String(),
-      'type': type,
+      'timestamp': timestamp.millisecondsSinceEpoch,
+      'senderPeerID': senderPeerID,
+      'channel': channel,
+      'mentions': mentions,
+      'isPrivate': isPrivate,
+      'isEncrypted': isEncrypted,
     };
   }
 
-  // 建立一筆「Hello World」測試訊息的工廠方法
-  factory BroadcastMessage.helloWorld({required String senderId}) {
+  factory BroadcastMessage.fromMap(Map<String, dynamic> map) {
     return BroadcastMessage(
-      senderId: senderId,
-      content: 'Hello World',
-      sentAt: DateTime.now(),
-      type: 'test',
+      id: map['id'] ?? '',
+      sender: map['sender'] ?? '',
+      content: map['content'] ?? '',
+      timestamp: DateTime.fromMillisecondsSinceEpoch(map['timestamp'] ?? DateTime.now().millisecondsSinceEpoch),
+      senderPeerID: map['senderPeerID'],
+      channel: map['channel'],
+      mentions: map['mentions'] != null ? List<String>.from(map['mentions']) : null,
+      isPrivate: map['isPrivate'] ?? false,
+      isEncrypted: map['isEncrypted'] ?? false,
     );
   }
 }

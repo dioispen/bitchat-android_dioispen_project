@@ -14,8 +14,8 @@ class FlutterChatActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // 傳遞 context 給 channels
-        channels = BitchatFlutterChannels(this, flutterEngine.dartExecutor.binaryMessenger)
+        // 傳遞 activity (this) 給 channels，以便支援權限請求
+        channels = BitchatFlutterChannels(this, flutterEngine.dartExecutor.binaryMessenger, this)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {

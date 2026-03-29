@@ -1,10 +1,18 @@
 package com.bitchat.android.flutter
 
+import android.app.Activity
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.bluetooth.BluetoothAdapter
+import android.location.LocationManager
 import android.util.Log
 import com.bitchat.android.identity.SecureIdentityStateManager
 import com.bitchat.android.service.MeshServiceHolder
+import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
+import com.bitchat.android.onboarding.PermissionManager
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -16,67 +24,89 @@ import io.flutter.plugin.common.MethodChannel
 class BitchatFlutterChannels(
     private val context: Context,
     messenger: BinaryMessenger,
+    private val activity: Activity? = null
 ) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
 
     private val methodChannel = MethodChannel(messenger, METHOD_CHANNEL_NAME)
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL_NAME)
     private val identityManager = SecureIdentityStateManager(context)
+    private val permissionManager = PermissionManager(context)
 
     private var eventSink: EventChannel.EventSink? = null
+
+    // 監聽系統藍牙與位置狀態變更
+    private val statusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            emitStatusUpdate()
+        }
+    }
 
     init {
         methodChannel.setMethodCallHandler(this)
         eventChannel.setStreamHandler(this)
+        
+        val filter = IntentFilter().apply {
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
+        }
+        context.registerReceiver(statusReceiver, filter)
+    }
+
+    private fun emitStatusUpdate() {
+        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+        val bluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
+        
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val locationEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) || 
+                             locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+        
+        val permissionsGranted = permissionManager.areRequiredPermissionsGranted()
+        val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else true
+
+        emitEvent(mapOf(
+            "type" to "system_status",
+            "bluetoothEnabled" to bluetoothEnabled,
+            "locationEnabled" to locationEnabled,
+            "permissionsGranted" to permissionsGranted,
+            "notificationGranted" to notificationGranted
+        ))
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            // 檢查是否已註冊（是否有身份密鑰）
+            "checkPermissions" -> {
+                val requiredGranted = permissionManager.areRequiredPermissionsGranted()
+                val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
+                } else true
+                result.success(requiredGranted && notificationGranted)
+            }
+
+            "requestPermissions" -> {
+                if (activity == null) {
+                    result.error("NO_ACTIVITY", "Cannot request permissions without an activity", null)
+                    return
+                }
+                val permissions = mutableListOf<String>()
+                permissions.addAll(permissionManager.getRequiredPermissions())
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    permissions.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                }
+                activity.requestPermissions(permissions.toTypedArray(), 1001)
+                result.success(true)
+            }
+
             "isRegistered" -> {
                 result.success(identityManager.hasIdentityData())
             }
 
-            // 獲取個人資料
-            "getProfile" -> {
-                if (identityManager.hasIdentityData()) {
-                    val keyPair = identityManager.loadStaticKey()
-                    val fingerprint = keyPair?.second?.let { identityManager.generateFingerprint(it) }
-                    val nickname = fingerprint?.let { identityManager.getCachedFingerprintNickname(it) }
-                    
-                    result.success(mapOf(
-                        "fingerprint" to fingerprint,
-                        "nickname" to nickname,
-                        "peerId" to fingerprint?.take(16)
-                    ))
-                } else {
-                    result.success(null)
-                }
-            }
-
-            // 執行註冊（產生原生密鑰並儲存暱稱）
-            "register" -> {
-                val nickname = call.argument<String>("nickname") ?: "User"
-                try {
-                    // 1. 產生身份密鑰
-                    val encryptionService = EncryptionService(context)
-                    // 確保身份存在，如果不存在會自動產生
-                    // Note: EncryptionService constructor calls initialize() which calls loadOrCreateEd25519KeyPair()
-                    // But for Static Noise Key, we should ensure it's generated.
-                    // Based on EncryptionService.kt, it uses NoiseEncryptionService which handles this in loadOrGenerateKeys()
-                    
-                    val fingerprint = encryptionService.getIdentityFingerprint()
-                    identityManager.cacheFingerprintNickname(fingerprint, nickname)
-                    
-                    result.success(true)
-                } catch (e: Exception) {
-                    Log.e("BitchatBridge", "Registration failed", e)
-                    result.error("REGISTRATION_FAILED", e.message, null)
-                }
-            }
-
-            // 啟動 Mesh 服務
             "startMesh" -> {
                 try {
+                    // 關鍵修正：確保在啟動 Mesh 時也嘗試啟動通知欄 Foreground Service
+                    MeshForegroundService.start(context)
+
                     val service = MeshServiceHolder.getOrCreate(context)
                     service.startServices()
                     result.success(true)
@@ -85,28 +115,6 @@ class BitchatFlutterChannels(
                 }
             }
 
-            // 發送訊息
-            "sendMessage" -> {
-                val peerId = call.argument<String>("peerId")
-                val text = call.argument<String>("text")
-                val isPublic = call.argument<Boolean>("isPublic") ?: true
-
-                val service = MeshServiceHolder.meshService
-                if (service == null) {
-                    result.error("SERVICE_NOT_RUNNING", "Mesh service is not initialized", null)
-                    return
-                }
-
-                if (isPublic) {
-                    service.sendMessage(text ?: "")
-                } else if (peerId != null) {
-                    val nickname = identityManager.getCachedFingerprintNickname(peerId) ?: "Peer"
-                    service.sendPrivateMessage(text ?: "", peerId, nickname)
-                }
-                result.success(null)
-            }
-
-            // 獲取附近裝置 (Peers)
             "getNearbyPeers" -> {
                 val service = MeshServiceHolder.meshService
                 val peers = service?.getPeerNicknames() ?: emptyMap<String, String>()
@@ -121,7 +129,7 @@ class BitchatFlutterChannels(
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
         eventSink = events
-        emitEvent(mapOf("type" to "status", "status" to "bridge_ready"))
+        emitStatusUpdate()
     }
 
     override fun onCancel(arguments: Any?) {
@@ -129,7 +137,13 @@ class BitchatFlutterChannels(
     }
 
     fun emitEvent(event: Map<String, Any?>) {
-        eventSink?.success(event)
+        activity?.runOnUiThread {
+            eventSink?.success(event)
+        }
+    }
+
+    fun destroy() {
+        try { context.unregisterReceiver(statusReceiver) } catch (e: Exception) {}
     }
 
     companion object {

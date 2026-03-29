@@ -11,71 +11,117 @@ class SetupScreen extends StatefulWidget {
   State<SetupScreen> createState() => _SetupScreenState();
 }
 
-class _SetupScreenState extends State<SetupScreen> {
-  String _statusText = '正在初始化 Mesh 網路...';
+class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
+  String _statusText = '正在初始化...';
   bool _isSearching = false;
+  bool _hasError = false;
+  bool _needsPermissions = false;
   Map<String, String> _nearbyPeers = {};
   Timer? _searchTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // 移除本地監聽器，改由 main.dart 的全局監聽處理彈窗
     _startSetup();
   }
 
   @override
   void dispose() {
-    _searchTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _stopTasks(); // 確保銷毀時停止所有任務
     super.dispose();
   }
 
+  void _stopTasks() {
+    _searchTimer?.cancel();
+    _searchTimer = null;
+    _isSearching = false;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 當使用者從系統設定授權回來時，自動重新檢查
+    if (state == AppLifecycleState.resumed && _hasError) {
+      _startSetup();
+    }
+  }
+
   Future<void> _startSetup() async {
-    // 1. 啟動 Mesh 服務
-    setState(() => _statusText = '啟動藍牙掃描與 Mesh 服務...');
-    // 注意：這裡假設權限已在原生端處理，或透過 Flutter 權限套件處理
-    bool started = await BitchatBridge.startMesh();
-    if (!started) {
-      setState(() => _statusText = '啟動失敗，請檢查藍牙權限。');
+    if (_isSearching) return;
+
+    setState(() {
+      _hasError = false;
+      _needsPermissions = false;
+      _statusText = '檢查必要權限與服務狀態...';
+    });
+
+    // 1. 檢查權限 (通知、藍牙相關、位置)
+    bool hasPermissions = await BitchatBridge.checkPermissions();
+    if (!hasPermissions) {
+      setState(() {
+        _hasError = true;
+        _needsPermissions = true;
+        _statusText = '權限未開啟。\n請確保已授權相關權限以維持運行。';
+      });
+      await BitchatBridge.requestPermissions();
       return;
     }
 
-    // 2. 開始搜尋附近裝置 (模擬原生檢查 UI)
+    // 2. 啟動 Mesh 服務
+    setState(() => _statusText = '啟動藍牙掃描與 Mesh 服務...');
+    bool started = await BitchatBridge.startMesh();
+    if (!started) {
+      setState(() {
+        _hasError = true;
+        _statusText = '啟動 Mesh 失敗。\n請確認藍牙已開啟，且通知權限已允許。';
+      });
+      return;
+    }
+
+    // 3. 開始搜尋附近裝置
     setState(() {
       _isSearching = true;
       _statusText = '正在搜尋附近裝置...';
     });
 
+    _searchTimer?.cancel();
     _searchTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       final peers = await BitchatBridge.getNearbyPeers();
-      setState(() {
-        _nearbyPeers = peers;
-      });
+      if (mounted) {
+        setState(() {
+          _nearbyPeers = peers;
+        });
+      }
       
-      // 搜尋 6 秒後繼續下一步，或者發現裝置後讓使用者手動點擊
+      // 搜尋 6 秒後繼續
       if (timer.tick >= 3) {
-        timer.cancel();
         _checkRegistration();
       }
     });
   }
 
   Future<void> _checkRegistration() async {
+    if (!mounted) return;
+    
+    // 重要：在導航前立即停止所有背景任務，解決 BLASTBufferQueue 問題
+    _stopTasks();
+    
     setState(() {
-      _isSearching = false;
       _statusText = '檢查註冊狀態...';
     });
 
-    await Future.delayed(const Duration(seconds: 1));
+    // 給予渲染引擎短暫緩衝時間處理狀態變更
+    await Future.delayed(const Duration(milliseconds: 500));
     bool registered = await BitchatBridge.isRegistered();
 
     if (mounted) {
       if (registered) {
-        // 已註冊，導向首頁
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const HomeScreen()),
         );
       } else {
-        // 未註冊，導向註冊頁面
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const RegisterScreen()),
         );
@@ -96,12 +142,20 @@ class _SetupScreenState extends State<SetupScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.bluetooth_searching_rounded, size: 80, color: brown),
+              Icon(
+                _hasError ? Icons.error_outline_rounded : Icons.bluetooth_searching_rounded, 
+                size: 80, 
+                color: _hasError ? Colors.redAccent : brown
+              ),
               const SizedBox(height: 32),
               Text(
                 _statusText,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: brown),
+                style: TextStyle(
+                  fontSize: 18, 
+                  fontWeight: FontWeight.bold, 
+                  color: _hasError ? Colors.redAccent : brown
+                ),
               ),
               const SizedBox(height: 24),
               if (_isSearching) ...[
@@ -128,6 +182,24 @@ class _SetupScreenState extends State<SetupScreen> {
                 ] else ...[
                   const Text('正在尋找其他 Bitchat 節點...', style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey)),
                 ],
+              ],
+              if (_hasError) ...[
+                const SizedBox(height: 32),
+                ElevatedButton(
+                  onPressed: () {
+                    if (_needsPermissions) {
+                      BitchatBridge.requestPermissions();
+                    } else {
+                      _startSetup();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: brown,
+                    foregroundColor: bg,
+                    padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                  ),
+                  child: Text(_needsPermissions ? '授權權限' : '重新檢查狀態'),
+                ),
               ],
             ],
           ),

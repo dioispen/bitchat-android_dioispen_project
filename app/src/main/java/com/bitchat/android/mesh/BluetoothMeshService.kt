@@ -694,6 +694,11 @@ class BluetoothMeshService(private val context: Context) {
     }
 
     /**
+     * Whether this service is currently active.
+     */
+    fun isStarted(): Boolean = isActive
+
+    /**
      * Whether this instance can be safely reused. Returns false after stopServices() or if
      * any critical internal scope has been cancelled.
      */

@@ -14,6 +14,26 @@ class BitchatBridge {
     });
   }
 
+  /// 檢查權限是否已開啟 (通知、藍牙、位置)
+  static Future<bool> checkPermissions() async {
+    try {
+      final bool? result = await _method.invokeMethod<bool>('checkPermissions');
+      return result ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// 請求權限
+  static Future<bool> requestPermissions() async {
+    try {
+      final bool? result = await _method.invokeMethod<bool>('requestPermissions');
+      return result ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   /// 檢查是否已註冊
   static Future<bool> isRegistered() async {
     try {

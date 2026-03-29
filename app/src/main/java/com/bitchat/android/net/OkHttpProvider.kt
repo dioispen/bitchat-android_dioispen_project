@@ -1,13 +1,13 @@
 package com.bitchat.android.net
 
 import okhttp3.OkHttpClient
-import java.net.InetSocketAddress
-import java.net.Proxy
+import okhttp3.Protocol
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Centralized OkHttp provider to ensure all network traffic honors Tor settings.
+ * Centralized OkHttp provider using Cloudflare (HTTP/2 and HTTP/1.1) for network traffic.
+ * Replaces the previous Tor-based implementation.
  */
 object OkHttpProvider {
     private val httpClientRef = AtomicReference<OkHttpClient?>(null)
@@ -20,7 +20,7 @@ object OkHttpProvider {
 
     fun httpClient(): OkHttpClient {
         httpClientRef.get()?.let { return it }
-        val client = baseBuilderForCurrentProxy()
+        val client = baseBuilder()
             .callTimeout(15, TimeUnit.SECONDS)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
@@ -31,7 +31,7 @@ object OkHttpProvider {
 
     fun webSocketClient(): OkHttpClient {
         wsClientRef.get()?.let { return it }
-        val client = baseBuilderForCurrentProxy()
+        val client = baseBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
@@ -40,16 +40,9 @@ object OkHttpProvider {
         return client
     }
 
-    private fun baseBuilderForCurrentProxy(): OkHttpClient.Builder {
-        val builder = OkHttpClient.Builder()
-        val torProvider = ArtiTorManager.getInstance()
-        val socks: InetSocketAddress? = torProvider.currentSocksAddress()
-        // If a SOCKS address is defined, always use it. TorProvider sets this as soon as Tor mode is ON,
-        // even before bootstrap, to prevent any direct connections from occurring.
-        if (socks != null) {
-            val proxy = Proxy(Proxy.Type.SOCKS, socks)
-            builder.proxy(proxy)
-        }
-        return builder
+    private fun baseBuilder(): OkHttpClient.Builder {
+        return OkHttpClient.Builder()
+            // 使用穩定版協議，避免 HTTP_3 造成的編譯錯誤
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
     }
 }

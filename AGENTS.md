@@ -72,3 +72,8 @@ The application follows a clean architecture pattern, heavily modularized by fea
 
 ---
 *Note: This file is intended to assist AI agents in navigating and modifying the codebase efficiently. Always verify context by reading the actual files before making changes.*
+
+# AGENTS.md 更新摘要
+- 移除 Networking 中的 Tor (Arti Rust bridge)
+- 移除 Directory Structure 中的 `nostr/`說明
+- 簡化組件說明，專注於 BLE Mesh 與 OkHttp 傳輸

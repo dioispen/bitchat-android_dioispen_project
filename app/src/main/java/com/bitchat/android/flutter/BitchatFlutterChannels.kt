@@ -76,7 +76,7 @@ class BitchatFlutterChannels(
         }
     }
 
-    private fun emitStatusUpdate() {
+    private fun getStatusMap(): Map<String, Any> {
         val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
         val bluetoothEnabled = bluetoothAdapter?.isEnabled ?: false
         
@@ -89,17 +89,25 @@ class BitchatFlutterChannels(
             permissionManager.isPermissionGranted(android.Manifest.permission.POST_NOTIFICATIONS)
         } else true
 
-        emitEvent(mapOf(
+        return mapOf(
             "type" to "system_status",
             "bluetoothEnabled" to bluetoothEnabled,
             "locationEnabled" to locationEnabled,
             "permissionsGranted" to permissionsGranted,
             "notificationGranted" to notificationGranted
-        ))
+        )
+    }
+
+    private fun emitStatusUpdate() {
+        emitEvent(getStatusMap())
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getSystemStatus" -> {
+                result.success(getStatusMap())
+            }
+
             "checkPermissions" -> {
                 val requiredGranted = permissionManager.areRequiredPermissionsGranted()
                 val notificationGranted = if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -145,7 +153,6 @@ class BitchatFlutterChannels(
                     
                     val service = MeshServiceHolder.meshService
                     if (service != null) {
-                        // 修正：SecureIdentityStateManager 中沒有 getPublicKeyHex，改用 loadStaticKey 並轉換
                         val publicKey = identityManager.loadStaticKey()?.second
                         val senderIdHex = publicKey?.toHexString() ?: "0000000000000000"
                         
@@ -156,10 +163,7 @@ class BitchatFlutterChannels(
                             payload = payload
                         )
                         
-                        // 修正：廣播健康報告
                         service.sendMessage(String(payload, Charsets.UTF_8))
-                        
-                        // 嘗試透過網路轉發 (Gateway 功能)
                         uplinkManager.uplinkPacketIfNeeded(packet)
                         result.success(true)
                     } else {

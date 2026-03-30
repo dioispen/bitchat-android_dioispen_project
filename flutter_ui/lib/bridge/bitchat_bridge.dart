@@ -14,6 +14,16 @@ class BitchatBridge {
     });
   }
 
+  /// 獲取當前系統狀態 (藍牙、位置、權限)
+  static Future<Map<String, dynamic>?> getSystemStatus() async {
+    try {
+      final Map<dynamic, dynamic>? result = await _method.invokeMethod<Map>('getSystemStatus');
+      return result?.map((k, v) => MapEntry(k.toString(), v));
+    } catch (e) {
+      return null;
+    }
+  }
+
   /// 檢查權限是否已開啟 (通知、藍牙、位置)
   static Future<bool> checkPermissions() async {
     try {

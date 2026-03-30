@@ -19,12 +19,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
  */
 class PacketUplinkManager(private val context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val client = OkHttpProvider.httpClient()
+    private val client by lazy { OkHttpProvider.httpClient(context) }
 
     companion object {
         private const val TAG = "PacketUplinkManager"
-        // TODO: 修改為您預計開發的 Server URL
-        private const val UPLINK_URL = "https://172.20.10.2:8443/health-report"
+        private const val UPLINK_URL = "https://delphine-eisteddfodic-afflictively.ngrok-free.dev"
         private val MEDIA_TYPE_OCTET_STREAM = "application/octet-stream".toMediaType()
     }
 

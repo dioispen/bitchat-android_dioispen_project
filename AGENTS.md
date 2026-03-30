@@ -79,4 +79,4 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - 簡化組件說明，專注於 BLE Mesh 與 OkHttp 傳輸
 
 # flutter_ui/
-- 此專案之ui改用flutter此目錄
+- 此專案之ui改用flutter之此目錄

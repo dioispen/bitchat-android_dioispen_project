@@ -89,6 +89,15 @@ class BitchatBridge {
     });
   }
 
+  /// 發送健康報告 (BLE 廣播 + 網路回報)
+  static Future<void> sendHealthReport(Map<String, dynamic> reportJson) async {
+    try {
+      await _method.invokeMethod<void>('sendHealthReport', reportJson);
+    } catch (e) {
+      // Ignore
+    }
+  }
+
   /// 獲取附近裝置
   static Future<Map<String, String>> getNearbyPeers() async {
     try {

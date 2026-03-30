@@ -7,7 +7,8 @@ import com.bitchat.android.model.IdentityAnnouncement
 import com.bitchat.android.model.RoutedPacket
 import com.bitchat.android.protocol.BitchatPacket
 import com.bitchat.android.protocol.MessageType
-import com.bitchat.android.protocol.DisasterReportPayload
+import com.bitchat.android.protocol.HealthReportPayload
+import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.util.toHexString
 import kotlinx.coroutines.*
 import java.util.*
@@ -367,8 +368,8 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
         
         val recipientID = packet.recipientID?.takeIf { !it.contentEquals(delegate?.getBroadcastRecipient()) }
         
-        if (packet.type == MessageType.DISASTER_REPORT.value) {
-            handleDisasterReport(routed)
+        if (packet.type == MessageType.HEALTH_REPORT.value) {
+            handleHealthReport(routed)
             return
         }
 
@@ -484,32 +485,35 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
     }
 
     /**
-     * Handle structured disaster report
+     * Handle structured health report
      */
-    private fun handleDisasterReport(routed: RoutedPacket) {
+    private fun handleHealthReport(routed: RoutedPacket) {
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 
-        val report = DisasterReportPayload.decode(packet.payload)
+        val report = HealthReportPayload.decode(packet.payload)
         if (report != null) {
-            Log.d(TAG, "📢 Received Disaster Report from $peerID: Severity=${report.severity}, Msg=${report.otherMessage}")
+            Log.d(TAG, "📢 Received Health Report from $peerID: Status=${report.status}, Msg=${report.description}")
 
             // 1. Notify UI/Flutter
             val message = BitchatMessage(
-                id = report.messageID,
-                sender = delegate?.getPeerNickname(peerID) ?: peerID,
-                content = "[DISASTER REPORT] Severity: ${report.severity}\nLocation: ${report.latitude}, ${report.longitude}\nHealth: C=${report.health.consciousness}, B=${report.health.bleeding}, R=${report.health.breathing}\nNote: ${report.otherMessage}",
+                id = report.reporterId,
+                sender = report.name,
+                content = "[HEALTH REPORT] Status: ${report.status}\nLocation: ${report.lat}, ${report.lng}\nNote: ${report.description}",
                 senderPeerID = peerID,
-                timestamp = Date(report.timestamp)
+                timestamp = Date()
             )
             delegate?.onMessageReceived(message)
 
             // 2. BACKEND CONCEPT: Automatic upload to management center if network is available
             uploadToManagementCenter(report)
+            
+            // 3. 轉發給 Flutter EventChannel
+            MeshServiceHolder.onPacketReceived?.invoke(packet)
         }
     }
 
-    private fun uploadToManagementCenter(report: DisasterReportPayload) {
+    private fun uploadToManagementCenter(report: HealthReportPayload) {
         handlerScope.launch {
             // Check network availability (simplified)
             val cm = appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
@@ -518,11 +522,8 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
             val hasInternet = caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
 
             if (hasInternet) {
-                Log.d(TAG, "🌐 Internet available, uploading disaster report ${report.messageID} to management center")
+                Log.d(TAG, "🌐 Internet available, uploading health report ${report.reporterId} to management center")
                 // TODO: Implement actual HTTP upload to your management center
-                // Example: use OkHttp to POST the report JSON or binary
-            } else {
-                Log.d(TAG, "📵 No internet, report ${report.messageID} will wait for relay or manual upload")
             }
         }
     }

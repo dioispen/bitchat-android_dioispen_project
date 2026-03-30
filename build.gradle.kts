@@ -7,6 +7,17 @@ plugins {
     id("com.google.gms.google-services") version "4.4.4" apply false
 }
 
+// Force Mockito version across all subprojects to fix Java 21 compatibility issues
+subprojects {
+    configurations.all {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "org.mockito" && requested.name == "mockito-core") {
+                useVersion("5.11.0")
+            }
+        }
+    }
+}
+
 tasks.whenTaskAdded {
     if (name.contains("ArtProfile")) {
         enabled = false

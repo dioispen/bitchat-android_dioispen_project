@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
+import '../bridge/bitchat_bridge.dart';
 
 class HealthService {
   String status = 'unknown';
@@ -24,6 +25,7 @@ class MutualAidTask {
   final double distanceKm;
   final String note;
   TaskStatus status;
+  final bool isBle;
 
   MutualAidTask({
     required this.id,
@@ -34,6 +36,7 @@ class MutualAidTask {
     required this.distanceKm,
     required this.note,
     this.status = TaskStatus.waiting,
+    this.isBle = false,
   });
 }
 
@@ -62,8 +65,10 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   Position? _currentPosition;
   String? _currentUserId;
   List<QueryDocumentSnapshot> _firestoreDocs = [];
+  final List<MutualAidTask> _bleTasks = [];
   final Map<String, TaskStatus> _taskStatusOverrides = {};
   StreamSubscription<QuerySnapshot>? _tasksSubscription;
+  StreamSubscription? _bridgeSubscription;
 
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
@@ -102,13 +107,60 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
     _tabController = TabController(length: 2, vsync: this);
     _loadUserAndPosition();
     _subscribeToTasks();
+    _listenToBridge();
   }
 
   @override
   void dispose() {
     _tasksSubscription?.cancel();
+    _bridgeSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
+  }
+
+  void _listenToBridge() {
+    _bridgeSubscription = BitchatBridge.events().listen((event) {
+      if (event['type'] == 'disaster_report') {
+        final reportData = event['report'];
+        if (reportData != null) {
+          final report = HealthReport.fromJson(Map<String, dynamic>.from(reportData));
+          if (report.reporterId == _currentUserId) return;
+
+          setState(() {
+            // 檢查是否已存在
+            final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
+            
+            double distanceKm = 0;
+            if (report.lat != null && report.lng != null && _currentPosition != null) {
+              final meters = Geolocator.distanceBetween(
+                _currentPosition!.latitude, _currentPosition!.longitude,
+                report.lat!, report.lng!,
+              );
+              distanceKm = meters / 1000;
+            }
+
+            final newTask = MutualAidTask(
+              id: 'ble_${report.reporterId}',
+              name: report.name,
+              userId: report.reporterId,
+              injury: report.status,
+              location: report.lat != null && report.lng != null
+                  ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
+                  : '位置未提供',
+              distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
+              note: report.description ?? '來自 BLE 廣播',
+              isBle: true,
+            );
+
+            if (index >= 0) {
+              _bleTasks[index] = newTask;
+            } else {
+              _bleTasks.add(newTask);
+            }
+          });
+        }
+      }
+    });
   }
 
   Future<void> _loadUserAndPosition() async {
@@ -150,7 +202,10 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   }
 
   List<MutualAidTask> _buildTaskList() {
-    return _firestoreDocs
+    final List<MutualAidTask> allTasks = [];
+    
+    // Firestore 任務
+    final firestoreTasks = _firestoreDocs
         .where((doc) {
           final data = doc.data() as Map<String, dynamic>;
           return data['reporterId'] != _currentUserId;
@@ -181,9 +236,20 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
             note: data['description'] as String? ?? '無補充說明',
             status: _taskStatusOverrides[doc.id] ?? TaskStatus.waiting,
           );
-        })
-        .toList()
-      ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+        });
+    
+    allTasks.addAll(firestoreTasks);
+
+    // 加入 BLE 任務 (去重：如果同一個 UserID 已經有 Firestore 任務，以 Firestore 為主)
+    for (var bleTask in _bleTasks) {
+      if (!allTasks.any((t) => t.userId == bleTask.userId)) {
+        bleTask.status = _taskStatusOverrides[bleTask.id] ?? TaskStatus.waiting;
+        allTasks.add(bleTask);
+      }
+    }
+
+    allTasks.sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+    return allTasks;
   }
 
   Color _statusColor() {
@@ -191,7 +257,6 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
     return match.isEmpty ? _textSecondary : match.first['color'] as Color;
   }
 
-  // 點選主狀態時的入口：安全直接送出，輕傷/重傷彈出細項選單
   void _onStatusTap(String status) {
     if (status == '安全') {
       _select('安全', null);
@@ -246,9 +311,17 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
         reportTime: DateTime.now(),
       );
 
+      final reportJson = report.toJson();
+
+      // 如果受傷，則透過 BLE 廣播
+      if (status == '輕傷' || status == '重傷') {
+        await BitchatBridge.sendHealthReport(reportJson);
+      }
+
+      // 上傳到 Firebase (原本邏輯保留)
       await FirebaseFirestore.instance
           .collection('health_reports')
-          .add(report.toJson());
+          .add(reportJson);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -698,6 +771,10 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                             ),
                           ),
                         ],
+                        if (task.isBle) ...[
+                          const SizedBox(width: 6),
+                          const Icon(Icons.bluetooth_audio_rounded, size: 14, color: Colors.blue),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 3),
@@ -852,6 +929,10 @@ class _TaskDetailSheet extends StatelessWidget {
                 _infoRow(Icons.location_on_rounded, '位置', task.location),
                 const Divider(height: 18, color: Color(0xFFE8E0D5)),
                 _infoRow(Icons.near_me_rounded, '距離', '${task.distanceKm} 公里'),
+                if (task.isBle) ...[
+                  const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                  _infoRow(Icons.bluetooth_audio_rounded, '來源', 'BLE 現場廣播'),
+                ],
               ],
             ),
           ),

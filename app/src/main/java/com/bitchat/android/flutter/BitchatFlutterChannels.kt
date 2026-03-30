@@ -13,6 +13,11 @@ import com.bitchat.android.service.MeshServiceHolder
 import com.bitchat.android.service.MeshForegroundService
 import com.bitchat.android.crypto.EncryptionService
 import com.bitchat.android.onboarding.PermissionManager
+import com.bitchat.android.protocol.MessageType
+import com.bitchat.android.protocol.BitchatPacket
+import com.bitchat.android.net.PacketUplinkManager
+import com.bitchat.android.util.toHexString
+import com.google.gson.Gson
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -31,6 +36,8 @@ class BitchatFlutterChannels(
     private val eventChannel = EventChannel(messenger, EVENT_CHANNEL_NAME)
     private val identityManager = SecureIdentityStateManager(context)
     private val permissionManager = PermissionManager(context)
+    private val uplinkManager = PacketUplinkManager(context)
+    private val gson = Gson()
 
     private var eventSink: EventChannel.EventSink? = null
 
@@ -50,6 +57,23 @@ class BitchatFlutterChannels(
             addAction(LocationManager.PROVIDERS_CHANGED_ACTION)
         }
         context.registerReceiver(statusReceiver, filter)
+
+        // 監聽來自 Mesh 的封包
+        MeshServiceHolder.onPacketReceived = { packet: BitchatPacket ->
+            if (packet.type == MessageType.HEALTH_REPORT.value) {
+                try {
+                    val payloadStr = String(packet.payload, Charsets.UTF_8)
+                    val reportMap = gson.fromJson(payloadStr, Map::class.java)
+                    emitEvent(mapOf(
+                        "type" to "health_report",
+                        "report" to reportMap,
+                        "senderId" to packet.senderID.toHexString()
+                    ))
+                } catch (e: Exception) {
+                    Log.e("BitchatBridge", "Failed to parse health report packet", e)
+                }
+            }
+        }
     }
 
     private fun emitStatusUpdate() {
@@ -104,9 +128,7 @@ class BitchatFlutterChannels(
 
             "startMesh" -> {
                 try {
-                    // 關鍵修正：確保在啟動 Mesh 時也嘗試啟動通知欄 Foreground Service
                     MeshForegroundService.start(context)
-
                     val service = MeshServiceHolder.getOrCreate(context)
                     service.startServices()
                     result.success(true)
@@ -115,10 +137,50 @@ class BitchatFlutterChannels(
                 }
             }
 
+            "sendHealthReport" -> {
+                try {
+                    val reportMap = call.arguments as Map<*, *>
+                    val reportJson = gson.toJson(reportMap)
+                    val payload = reportJson.toByteArray(Charsets.UTF_8)
+                    
+                    val service = MeshServiceHolder.meshService
+                    if (service != null) {
+                        // 修正：SecureIdentityStateManager 中沒有 getPublicKeyHex，改用 loadStaticKey 並轉換
+                        val publicKey = identityManager.loadStaticKey()?.second
+                        val senderIdHex = publicKey?.toHexString() ?: "0000000000000000"
+                        
+                        val packet = BitchatPacket(
+                            type = MessageType.HEALTH_REPORT.value,
+                            ttl = 3u,
+                            senderID = senderIdHex,
+                            payload = payload
+                        )
+                        
+                        // 修正：廣播健康報告
+                        service.sendMessage(String(payload, Charsets.UTF_8))
+                        
+                        // 嘗試透過網路轉發 (Gateway 功能)
+                        uplinkManager.uplinkPacketIfNeeded(packet)
+                        result.success(true)
+                    } else {
+                        result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
+                    }
+                } catch (e: Exception) {
+                    result.error("SEND_FAILED", e.message, null)
+                }
+            }
+
             "getNearbyPeers" -> {
                 val service = MeshServiceHolder.meshService
                 val peers = service?.getPeerNicknames() ?: emptyMap<String, String>()
                 result.success(peers)
+            }
+
+            "sendMessage" -> {
+                val text = call.argument<String>("text") ?: ""
+                val service = MeshServiceHolder.meshService
+                service?.sendMessage(text)
+                result.success(null)
             }
 
             else -> {
@@ -144,6 +206,7 @@ class BitchatFlutterChannels(
 
     fun destroy() {
         try { context.unregisterReceiver(statusReceiver) } catch (e: Exception) {}
+        MeshServiceHolder.onPacketReceived = null
     }
 
     companion object {

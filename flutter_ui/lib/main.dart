@@ -8,18 +8,21 @@ import 'screens/setup_screen.dart';
 // 全局 NavigatorKey 用於在沒有 Context 的情況下顯示 Dialog
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() async {
-  // 確保 Flutter 引擎初始化
+void main() async{
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   try {
     // 優先檢查是否已有應用程式實例
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
+    } else {
+      // 如果已經存在，則直接使用目前的實例
+      Firebase.app();
     }
   } catch (e) {
+    // 捕獲所有初始化錯誤，避免引擎崩潰
     debugPrint('Firebase initialization warning: $e');
   }
 

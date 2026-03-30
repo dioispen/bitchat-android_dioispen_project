@@ -24,7 +24,7 @@ class PacketUplinkManager(private val context: Context) {
     companion object {
         private const val TAG = "PacketUplinkManager"
         // TODO: 修改為您預計開發的 Server URL
-        private const val UPLINK_URL = "https://your-api-server.com/api/v1/packets/uplink"
+        private const val UPLINK_URL = "http://172.20.10.2:8080/health-report"
         private val MEDIA_TYPE_OCTET_STREAM = "application/octet-stream".toMediaType()
     }
 

@@ -77,3 +77,6 @@ The application follows a clean architecture pattern, heavily modularized by fea
 - 移除 Networking 中的 Tor (Arti Rust bridge)
 - 移除 Directory Structure 中的 `nostr/`說明
 - 簡化組件說明，專注於 BLE Mesh 與 OkHttp 傳輸
+
+# flutter_ui/
+- 此專案之ui改用flutter此目錄

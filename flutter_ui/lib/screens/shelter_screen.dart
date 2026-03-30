@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_cache/flutter_map_cache.dart';
@@ -48,14 +49,6 @@ class Shelter {
       );
 }
 
-// ── 模擬伺服器資料（上線時替換為 API 呼叫）────────────────
-final _serverShelters = [
-  Shelter(name: '埔里地下停車場', lat: 23.964, lng: 120.967, capacity: '500 人', status: '開放中'),
-  Shelter(name: '南投縣政府防空洞', lat: 23.960, lng: 120.972, capacity: '300 人', status: '開放中'),
-  Shelter(name: '埔里鎮公所地下室', lat: 23.961, lng: 120.969, capacity: '200 人', status: '開放中'),
-  Shelter(name: '埔里國中地下室', lat: 23.967, lng: 120.965, capacity: '400 人', status: '即將滿員'),
-  Shelter(name: '愛蘭國小避難所', lat: 23.955, lng: 120.970, capacity: '250 人', status: '開放中'),
-];
 
 const _prefsKeyShelters = 'offline_shelters';
 const _prefsKeyUpdatedAt = 'shelters_updated_at';
@@ -219,11 +212,84 @@ class _ShelterScreenState extends State<ShelterScreen> with SingleTickerProvider
     _shelters.sort((a, b) => (a.distanceKm ?? 99).compareTo(b.distanceKm ?? 99));
   }
 
+  // ── 從居住區域萃取縣市名稱 ───────────────────────────────
+  String _extractCounty(String area) {
+    // 正規化：台 → 臺
+    final normalized = area.replaceAll('台', '臺');
+    if (normalized.length >= 3) {
+      final prefix = normalized.substring(0, 3);
+      if (prefix.endsWith('市') || prefix.endsWith('縣')) return prefix;
+    }
+    // 常見縮寫對應
+    if (area.contains('台北') || area.contains('臺北')) return '臺北市';
+    if (area.contains('新北')) return '新北市';
+    if (area.contains('桃園')) return '桃園市';
+    if (area.contains('台中') || area.contains('臺中')) return '臺中市';
+    if (area.contains('台南') || area.contains('臺南')) return '臺南市';
+    if (area.contains('高雄')) return '高雄市';
+    if (area.contains('南投')) return '南投縣';
+    return '臺北市'; // 預設
+  }
+
   // ── 線上載入資料 ─────────────────────────────────────────
   Future<void> _loadOnlineData() async {
-    // TODO: 替換為 http.get(Uri.parse('https://your-api/shelters'))
-    await Future.delayed(const Duration(milliseconds: 400));
-    _shelters = _serverShelters.map((s) => Shelter.fromJson(s.toJson())).toList();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userJson = prefs.getString('app_user');
+      String county = '臺北市';
+      if (userJson != null) {
+        final userData = jsonDecode(userJson) as Map<String, dynamic>;
+        final area = userData['area'] as String? ?? '';
+        county = _extractCounty(area);
+      }
+
+      final url = Uri.parse('https://kiang.github.io/npa.gov.tw/json/$county.json');
+      final response = await http.get(url).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final geojson = jsonDecode(response.body) as Map<String, dynamic>;
+        final features = geojson['features'] as List;
+        final allShelters = features.map((f) {
+          final props = f['properties'] as Map<String, dynamic>;
+          final coords = f['geometry']['coordinates'] as List;
+          final lng = (coords[0] as num).toDouble();
+          final lat = (coords[1] as num).toDouble();
+          final cap = (props['可容納人數'] as num?)?.toInt() ?? 0;
+          return Shelter(
+            name: props['地址'] as String? ?? '未知地址',
+            lat: lat,
+            lng: lng,
+            capacity: '$cap 人',
+            status: '開放中',
+          );
+        }).toList();
+
+        // 若有位置，取最近的 200 筆；否則取容量最大的 200 筆
+        if (_currentLocation != null) {
+          for (final s in allShelters) {
+            s.distanceKm = _calcDistKm(
+                _currentLocation!.latitude, _currentLocation!.longitude, s.lat, s.lng);
+          }
+          allShelters.sort((a, b) => (a.distanceKm ?? 99).compareTo(b.distanceKm ?? 99));
+        } else {
+          allShelters.sort((a, b) {
+            final capA = int.tryParse(a.capacity.replaceAll(' 人', '')) ?? 0;
+            final capB = int.tryParse(b.capacity.replaceAll(' 人', '')) ?? 0;
+            return capB.compareTo(capA);
+          });
+        }
+        _shelters = allShelters.take(200).toList();
+
+        // 快取到本機供離線使用
+        await prefs.setString(
+            _prefsKeyShelters, jsonEncode(_shelters.map((s) => s.toJson()).toList()));
+        await prefs.setString(_prefsKeyUpdatedAt, DateTime.now().toIso8601String());
+      } else {
+        await _loadOfflineData();
+      }
+    } catch (_) {
+      await _loadOfflineData();
+    }
   }
 
   // ── 移動地圖到我的位置 ────────────────────────────────────

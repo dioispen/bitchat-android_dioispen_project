@@ -16,4 +16,6 @@ class Message {
         json['text'] as String,
         DateTime.parse(json['time'] as String),
       );
+
+      
 }

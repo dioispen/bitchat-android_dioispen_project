@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.kotlin.compose)
+    id("com.google.gms.google-services")
 }
 
 android {
@@ -138,6 +139,7 @@ dependencies {
 
     // Google Play Services Location
     implementation(libs.gms.location)
+    implementation(platform("com.google.firebase:firebase-bom:34.11.0"))
 
     // Security preferences
     implementation(libs.androidx.security.crypto)

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
 import 'package:flutter/material.dart';
 import 'bridge/bitchat_bridge.dart';
 import 'screens/setup_screen.dart';
@@ -6,8 +8,9 @@ import 'screens/setup_screen.dart';
 // 全局 NavigatorKey 用於在沒有 Context 的情況下顯示 Dialog
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() {
+void main() async{
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const BitchatFlutterUiApp());
 }
 

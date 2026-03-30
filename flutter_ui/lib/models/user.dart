@@ -27,9 +27,10 @@ class AppUser {
 
   /// 產生唯一 User ID
   static String generateId() {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final rand = Random().nextInt(99999).toString().padLeft(5, '0');
-    return 'UID-$now-$rand';
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rand = Random();
+    final code = List.generate(6, (_) => chars[rand.nextInt(chars.length)]).join();
+    return 'UID-$code';
   }
 
   Map<String, dynamic> toJson() => {

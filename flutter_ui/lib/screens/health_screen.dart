@@ -1,75 +1,42 @@
-import 'dart:math';
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:geolocator/geolocator.dart';
+import '../models/user.dart';
+import '../models/health_report.dart';
 
-// ── 求助任務狀態 ─────────────────────────────────────────
-enum TaskStatus { pending, helped }
+class HealthService {
+  String status = 'unknown';
+  void updateStatus(String newStatus) => status = newStatus;
+  String getStatus() => status;
+}
 
-// ── 求助任務模型 ─────────────────────────────────────────
-class EmergencyTask {
+enum TaskStatus { waiting, accepted, done }
+
+class MutualAidTask {
   final String id;
-  final String type;        // '輕傷' or '重傷'
-  final String? note;
-  final DateTime reportedAt;
-  final double lat;
-  final double lng;
+  final String name;
+  final String userId;
+  final String injury;
+  final String location;
+  final double distanceKm;
+  final String note;
   TaskStatus status;
 
-  EmergencyTask({
+  MutualAidTask({
     required this.id,
-    required this.type,
-    this.note,
-    required this.reportedAt,
-    required this.lat,
-    required this.lng,
-    this.status = TaskStatus.pending,
+    required this.name,
+    required this.userId,
+    required this.injury,
+    required this.location,
+    required this.distanceKm,
+    required this.note,
+    this.status = TaskStatus.waiting,
   });
 }
 
-// ── 距離計算 ─────────────────────────────────────────────
-double _calcDistKm(double lat1, double lon1, double lat2, double lon2) {
-  const r = 6371.0;
-  final dLat = (lat2 - lat1) * pi / 180;
-  final dLon = (lon2 - lon1) * pi / 180;
-  final a = sin(dLat / 2) * sin(dLat / 2) +
-      cos(lat1 * pi / 180) * cos(lat2 * pi / 180) *
-          sin(dLon / 2) * sin(dLon / 2);
-  return r * 2 * atan2(sqrt(a), sqrt(1 - a));
-}
-
-// ── 模擬附近求助任務 ─────────────────────────────────────
-final _demoTasks = <EmergencyTask>[
-  EmergencyTask(
-    id: 't1', type: '重傷', note: '腿部骨折，無法移動',
-    reportedAt: DateTime.now().subtract(const Duration(minutes: 8)),
-    lat: 23.9638, lng: 120.9675,
-  ),
-  EmergencyTask(
-    id: 't2', type: '輕傷', note: '頭部撞傷，意識清醒',
-    reportedAt: DateTime.now().subtract(const Duration(minutes: 18)),
-    lat: 23.9652, lng: 120.9690,
-  ),
-  EmergencyTask(
-    id: 't3', type: '重傷', note: '',
-    reportedAt: DateTime.now().subtract(const Duration(minutes: 30, hours: 0)),
-    lat: 23.9625, lng: 120.9660,
-  ),
-  EmergencyTask(
-    id: 't4', type: '輕傷', note: '',
-    reportedAt: DateTime.now().subtract(const Duration(minutes: 44)),
-    lat: 23.9610, lng: 120.9700,
-  ),
-  EmergencyTask(
-    id: 't5', type: '重傷', note: '呼吸困難',
-    reportedAt: DateTime.now().subtract(const Duration(hours: 1, minutes: 5)),
-    lat: 23.9670, lng: 120.9650,
-  ),
-];
-
-// 假設使用者目前位置（測試用）
-const _myLat = 23.962;
-const _myLng = 120.969;
-
-// ── 主畫面 ───────────────────────────────────────────────
 class HealthScreen extends StatefulWidget {
   const HealthScreen({super.key});
 
@@ -77,106 +44,284 @@ class HealthScreen extends StatefulWidget {
   State<HealthScreen> createState() => _HealthScreenState();
 }
 
-class _HealthScreenState extends State<HealthScreen>
-    with SingleTickerProviderStateMixin {
+class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderStateMixin {
+  final HealthService _healthService = HealthService();
+  String _selectedStatus = '尚未回報';
+  String? _selectedSubInjury;
+  late TabController _tabController;
+
+  static const _minorSubOptions = [
+    '擦傷', '割傷', '瘀傷 / 撞傷', '扭傷',
+    '燙傷（輕度）', '頭暈 / 頭痛', '手指或腳趾骨折', '輕度呼吸不適',
+  ];
+  static const _severeSubOptions = [
+    '四肢骨折', '大量出血', '嚴重燙傷', '頭部外傷',
+    '胸腹部外傷', '脊椎傷害', '意識不清', '失去意識',
+  ];
+
+  Position? _currentPosition;
+  String? _currentUserId;
+  List<QueryDocumentSnapshot> _firestoreDocs = [];
+  final Map<String, TaskStatus> _taskStatusOverrides = {};
+  StreamSubscription<QuerySnapshot>? _tasksSubscription;
+
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
   static const _textPrimary = Color(0xFF3D2C1E);
   static const _textSecondary = Color(0xFF8C7B6E);
   static const _green = Color(0xFF7AA67A);
+  static const _orange = Color(0xFFBF7A5A);
+  static const _red = Color(0xFFC4553A);
+  static const _purple = Color(0xFF9B88B3);
 
-  late final TabController _tabController;
-  String _myStatus = '尚未回報';
-  final List<EmergencyTask> _tasks = List.from(_demoTasks);
-
-  static const _statusOptions = [
+  final List<Map<String, dynamic>> _statusOptions = [
     {
       'label': '安全',
       'desc': '本人平安，無需協助',
       'icon': Icons.check_circle_rounded,
-      'color': Color(0xFF7AA67A),
-      'publishTask': false,
+      'color': const Color(0xFF7AA67A),
     },
     {
       'label': '輕傷',
-      'desc': '有輕微傷口，已向管理端回報，附近用戶可前來協助',
+      'desc': '有輕微傷口，能自行行動',
       'icon': Icons.medical_services_rounded,
-      'color': Color(0xFFBF7A5A),
-      'publishTask': true,
+      'color': const Color(0xFFBF7A5A),
     },
     {
       'label': '重傷',
-      'desc': '受傷嚴重，已向管理端回報，附近用戶可前來協助',
+      'desc': '受傷嚴重，需要醫療協助',
       'icon': Icons.emergency_rounded,
-      'color': Color(0xFFC4553A),
-      'publishTask': true,
+      'color': const Color(0xFFC4553A),
     },
   ];
+
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    // 計算每筆任務與使用者的距離
-    for (final t in _tasks) {
-      t.status = TaskStatus.pending;
-    }
+    _loadUserAndPosition();
+    _subscribeToTasks();
   }
 
   @override
   void dispose() {
+    _tasksSubscription?.cancel();
     _tabController.dispose();
     super.dispose();
   }
 
-  Color _myStatusColor() {
-    final match = _statusOptions.where((o) => o['label'] == _myStatus);
+  Future<void> _loadUserAndPosition() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userJson = prefs.getString('app_user');
+    if (userJson != null) {
+      final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+      if (mounted) setState(() => _currentUserId = user.id);
+    }
+    final savedStatus = prefs.getString('health_status');
+    final savedSub = prefs.getString('health_sub_injury');
+    if (mounted) {
+      setState(() {
+        if (savedStatus != null) _selectedStatus = savedStatus;
+        _selectedSubInjury = savedSub;
+      });
+    }
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
+        final position = await Geolocator.getCurrentPosition();
+        if (mounted) setState(() => _currentPosition = position);
+      }
+    } catch (_) {}
+  }
+
+  void _subscribeToTasks() {
+    _tasksSubscription = FirebaseFirestore.instance
+        .collection('health_reports')
+        .where('status', whereIn: ['輕傷', '重傷'])
+        .snapshots()
+        .listen((snapshot) {
+          if (mounted) setState(() => _firestoreDocs = snapshot.docs);
+        });
+  }
+
+  List<MutualAidTask> _buildTaskList() {
+    return _firestoreDocs
+        .where((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          return data['reporterId'] != _currentUserId;
+        })
+        .map((doc) {
+          final data = doc.data() as Map<String, dynamic>;
+          final lat = (data['lat'] as num?)?.toDouble();
+          final lng = (data['lng'] as num?)?.toDouble();
+
+          double distanceKm = 0;
+          if (lat != null && lng != null && _currentPosition != null) {
+            final meters = Geolocator.distanceBetween(
+              _currentPosition!.latitude, _currentPosition!.longitude,
+              lat, lng,
+            );
+            distanceKm = meters / 1000;
+          }
+
+          return MutualAidTask(
+            id: doc.id,
+            name: data['name'] as String? ?? '未知',
+            userId: data['reporterId'] as String? ?? '',
+            injury: data['status'] as String? ?? '輕傷',
+            location: lat != null && lng != null
+                ? '緯度 ${lat.toStringAsFixed(4)}, 經度 ${lng.toStringAsFixed(4)}'
+                : '位置未提供',
+            distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
+            note: data['description'] as String? ?? '無補充說明',
+            status: _taskStatusOverrides[doc.id] ?? TaskStatus.waiting,
+          );
+        })
+        .toList()
+      ..sort((a, b) => a.distanceKm.compareTo(b.distanceKm));
+  }
+
+  Color _statusColor() {
+    final match = _statusOptions.where((o) => o['label'] == _selectedStatus);
     return match.isEmpty ? _textSecondary : match.first['color'] as Color;
   }
 
-  // 回報狀態 + 發布求助任務（輕傷/重傷）
-  void _reportStatus(Map<String, dynamic> option) {
-    final label = option['label'] as String;
-    final publish = option['publishTask'] as bool;
+  // 點選主狀態時的入口：安全直接送出，輕傷/重傷彈出細項選單
+  void _onStatusTap(String status) {
+    if (status == '安全') {
+      _select('安全', null);
+      return;
+    }
+    final subOptions = status == '輕傷' ? _minorSubOptions : _severeSubOptions;
+    final color = status == '輕傷' ? _orange : _red;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _SubInjurySheet(
+        title: status,
+        subOptions: subOptions,
+        color: color,
+        onSelect: (sub) {
+          Navigator.pop(context);
+          _select(status, sub);
+        },
+      ),
+    );
+  }
 
+  Future<void> _select(String status, String? subInjury) async {
+    _healthService.updateStatus(status);
     setState(() {
-      _myStatus = label;
-      // 若為輕傷/重傷，在附近任務中加入自己的任務
-      if (publish) {
-        _tasks.insert(
-          0,
-          EmergencyTask(
-            id: 'my_${DateTime.now().millisecondsSinceEpoch}',
-            type: label,
-            note: '我自行回報',
-            reportedAt: DateTime.now(),
-            lat: _myLat,
-            lng: _myLng,
+      _selectedStatus = status;
+      _selectedSubInjury = subInjury;
+    });
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('health_status', status);
+      if (subInjury != null) {
+        await prefs.setString('health_sub_injury', subInjury);
+      } else {
+        await prefs.remove('health_sub_injury');
+      }
+      final userJson = prefs.getString('app_user');
+      if (userJson == null) return;
+      final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+
+      final report = HealthReport(
+        reporterId: user.id,
+        name: user.name,
+        phone: user.phone,
+        bloodType: user.bloodType,
+        status: status,
+        description: subInjury,
+        lat: _currentPosition?.latitude,
+        lng: _currentPosition?.longitude,
+        reportTime: DateTime.now(),
+      );
+
+      await FirebaseFirestore.instance
+          .collection('health_reports')
+          .add(report.toJson());
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已回報：$status'),
+            backgroundColor: _statusColor(),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: const EdgeInsets.all(16),
           ),
         );
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('回報失敗：$e'),
+            backgroundColor: _red,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(option['icon'] as IconData, color: Colors.white, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                publish
-                    ? '已回報「$label」給管理端，並發布至附近求助任務'
-                    : '已回報「$label」給管理端',
-              ),
+  Color _injuryColor(String injury) {
+    if (injury == '重傷') return _red;
+    if (injury == '輕傷') return _orange;
+    return _green;
+  }
+
+  IconData _injuryIcon(String injury) {
+    if (injury == '重傷') return Icons.emergency_rounded;
+    if (injury == '輕傷') return Icons.medical_services_rounded;
+    return Icons.check_circle_rounded;
+  }
+
+  void _showTaskDetail(MutualAidTask task) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _TaskDetailSheet(
+        task: task,
+        injuryColor: _injuryColor(task.injury),
+        onAccept: () {
+          setState(() => _taskStatusOverrides[task.id] = TaskStatus.accepted);
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已接受協助 ${task.name} 的任務'),
+              backgroundColor: _purple,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              margin: const EdgeInsets.all(16),
             ),
-          ],
-        ),
-        backgroundColor: option['color'] as Color,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 3),
+          );
+        },
+        onDone: () {
+          setState(() => _taskStatusOverrides[task.id] = TaskStatus.done);
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('已完成協助 ${task.name}'),
+              backgroundColor: _green,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        },
       ),
     );
   }
@@ -193,10 +338,32 @@ class _HealthScreenState extends State<HealthScreen>
           controller: _tabController,
           labelColor: _textPrimary,
           unselectedLabelColor: _textSecondary,
-          indicatorColor: _green,
-          tabs: const [
-            Tab(icon: Icon(Icons.person_rounded), text: '我的狀態'),
-            Tab(icon: Icon(Icons.people_rounded), text: '附近求助任務'),
+          indicatorColor: _orange,
+          indicatorWeight: 2.5,
+          labelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+          unselectedLabelStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          tabs: [
+            const Tab(text: '我的狀態'),
+            Tab(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('互救任務'),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: _red,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      '${_buildTaskList().where((t) => t.status == TaskStatus.waiting).length}',
+                      style: const TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -204,13 +371,12 @@ class _HealthScreenState extends State<HealthScreen>
         controller: _tabController,
         children: [
           _buildMyStatusTab(),
-          _buildNearbyTasksTab(),
+          _buildMutualAidTab(),
         ],
       ),
     );
   }
 
-  // ── Tab 1：我的狀態 ──────────────────────────────────────
   Widget _buildMyStatusTab() {
     return SafeArea(
       child: Padding(
@@ -238,16 +404,14 @@ class _HealthScreenState extends State<HealthScreen>
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: _myStatusColor().withValues(alpha: 0.12),
+                      color: _statusColor().withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      _statusOptions.where((o) => o['label'] == _myStatus).isEmpty
+                      _statusOptions.where((o) => o['label'] == _selectedStatus).isEmpty
                           ? Icons.help_outline_rounded
-                          : _statusOptions
-                              .firstWhere((o) => o['label'] == _myStatus)['icon']
-                              as IconData,
-                      color: _myStatusColor(),
+                          : _statusOptions.firstWhere((o) => o['label'] == _selectedStatus)['icon'] as IconData,
+                      color: _statusColor(),
                       size: 28,
                     ),
                   ),
@@ -255,57 +419,36 @@ class _HealthScreenState extends State<HealthScreen>
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('目前回報狀態',
-                          style: TextStyle(fontSize: 12, color: _textSecondary)),
+                      const Text('目前回報狀態', style: TextStyle(fontSize: 12, color: _textSecondary)),
                       const SizedBox(height: 3),
                       Text(
-                        _myStatus,
+                        _selectedStatus,
                         style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w800,
-                          color: _myStatusColor(),
+                          color: _statusColor(),
                         ),
                       ),
+                      if (_selectedSubInjury != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          _selectedSubInjury!,
+                          style: TextStyle(fontSize: 13, color: _statusColor().withValues(alpha: 0.8)),
+                        ),
+                      ],
                     ],
                   ),
                 ],
               ),
             ),
 
-            const SizedBox(height: 20),
-
-            // 說明
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: _green.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.info_outline_rounded, size: 15, color: _green),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text(
-                      '回報「輕傷」或「重傷」時，附近用戶將看到你的求助任務',
-                      style: TextStyle(fontSize: 12, color: _green),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
             const Padding(
               padding: EdgeInsets.only(left: 4, bottom: 12),
               child: Text(
                 '選擇狀態',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: _textSecondary,
-                    letterSpacing: 1.2),
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: _textSecondary, letterSpacing: 1.2),
               ),
             ),
 
@@ -316,33 +459,34 @@ class _HealthScreenState extends State<HealthScreen>
                 itemBuilder: (context, index) {
                   final option = _statusOptions[index];
                   final color = option['color'] as Color;
-                  final isSelected = _myStatus == option['label'];
+                  final isSelected = _selectedStatus == option['label'];
                   return GestureDetector(
-                    onTap: () => _reportStatus(option),
+                    onTap: () => _onStatusTap(option['label'] as String),
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 14),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
-                        color: isSelected
-                            ? color.withValues(alpha: 0.08)
-                            : _card,
+                        color: isSelected ? color.withValues(alpha: 0.08) : _card,
                         borderRadius: BorderRadius.circular(18),
                         border: Border.all(
-                          color: isSelected
-                              ? color.withValues(alpha: 0.6)
-                              : const Color(0xFFE8E0D5),
+                          color: isSelected ? color.withValues(alpha: 0.6) : const Color(0xFFE8E0D5),
                           width: 1.5,
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: isSelected
-                                ? color.withValues(alpha: 0.12)
-                                : const Color(0xFF3D2C1E).withValues(alpha: 0.04),
-                            blurRadius: isSelected ? 10 : 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
+                        boxShadow: isSelected
+                            ? [
+                                BoxShadow(
+                                  color: color.withValues(alpha: 0.12),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ]
+                            : [
+                                BoxShadow(
+                                  color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                       ),
                       child: Row(
                         children: [
@@ -352,8 +496,7 @@ class _HealthScreenState extends State<HealthScreen>
                               color: color.withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: Icon(option['icon'] as IconData,
-                                color: color, size: 22),
+                            child: Icon(option['icon'] as IconData, color: color, size: 22),
                           ),
                           const SizedBox(width: 14),
                           Expanded(
@@ -371,19 +514,15 @@ class _HealthScreenState extends State<HealthScreen>
                                 const SizedBox(height: 2),
                                 Text(
                                   option['desc'] as String,
-                                  style: const TextStyle(
-                                      fontSize: 12, color: _textSecondary),
+                                  style: const TextStyle(fontSize: 12, color: _textSecondary),
                                 ),
                               ],
                             ),
                           ),
-                          const SizedBox(width: 8),
                           if (isSelected)
-                            Icon(Icons.check_circle_rounded,
-                                color: color, size: 22)
+                            Icon(Icons.check_circle_rounded, color: color, size: 22)
                           else
-                            const Icon(Icons.circle_outlined,
-                                color: Color(0xFFE8E0D5), size: 22),
+                            Icon(Icons.circle_outlined, color: const Color(0xFFE8E0D5), size: 22),
                         ],
                       ),
                     ),
@@ -397,363 +536,472 @@ class _HealthScreenState extends State<HealthScreen>
     );
   }
 
-  // ── Tab 2：附近求助任務 ──────────────────────────────────
-  Widget _buildNearbyTasksTab() {
-    final pendingTasks =
-        _tasks.where((t) => t.status == TaskStatus.pending).toList();
+  Widget _buildMutualAidTab() {
+    final tasks = _buildTaskList();
+    final waiting = tasks.where((t) => t.status == TaskStatus.waiting).toList();
+    final accepted = tasks.where((t) => t.status == TaskStatus.accepted).toList();
+    final done = tasks.where((t) => t.status == TaskStatus.done).toList();
 
     return SafeArea(
-      child: Column(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         children: [
-          // 頂部摘要
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: BoxDecoration(
-                color: _card,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
-                    blurRadius: 8,
+          // 說明橫幅
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: _purple.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _purple.withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.volunteer_activism_rounded, color: _purple, size: 20),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    '附近有人需要協助，請量力而為，確保自身安全後再行救援',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF6B5B82), height: 1.4),
                   ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.location_searching_rounded,
-                      size: 18, color: Color(0xFFC4553A)),
-                  const SizedBox(width: 8),
-                  Text(
-                    '附近共 ${pendingTasks.length} 個待協助任務',
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: _textPrimary),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
 
-          const SizedBox(height: 10),
+          if (waiting.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionLabel('待救援', waiting.length, _red),
+            const SizedBox(height: 8),
+            ...waiting.map((t) => _taskCard(t)),
+          ],
 
-          Expanded(
-            child: pendingTasks.isEmpty
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.favorite_rounded,
-                            size: 52,
-                            color:
-                                _textSecondary.withValues(alpha: 0.3)),
-                        const SizedBox(height: 12),
-                        const Text('附近目前無求助任務',
-                            style: TextStyle(
-                                fontSize: 15, color: _textSecondary)),
-                      ],
-                    ),
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 4),
-                    itemCount: pendingTasks.length,
-                    separatorBuilder: (_, _) =>
-                        const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final task = pendingTasks[index];
-                      final dist = _calcDistKm(
-                          _myLat, _myLng, task.lat, task.lng);
-                      final isHeavy = task.type == '重傷';
-                      final color = isHeavy
-                          ? const Color(0xFFC4553A)
-                          : const Color(0xFFBF7A5A);
-                      final timeStr = _formatTime(task.reportedAt);
+          if (accepted.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionLabel('進行中', accepted.length, _purple),
+            const SizedBox(height: 8),
+            ...accepted.map((t) => _taskCard(t)),
+          ],
 
-                      return Container(
-                        decoration: BoxDecoration(
-                          color: _card,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border(
-                            left: BorderSide(color: color, width: 4),
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF3D2C1E)
-                                  .withValues(alpha: 0.05),
-                              blurRadius: 8,
-                              offset: const Offset(0, 2),
-                            ),
-                          ],
-                        ),
-                        child: Padding(
-                          padding: const EdgeInsets.all(14),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 8,
-                                                  vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: color
-                                                .withValues(alpha: 0.12),
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                          ),
-                                          child: Text(
-                                            '類型：${task.type}',
-                                            style: TextStyle(
-                                                fontSize: 12,
-                                                fontWeight: FontWeight.w700,
-                                                color: color),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding:
-                                              const EdgeInsets.symmetric(
-                                                  horizontal: 7,
-                                                  vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: const Color(0xFF8C7B6E)
-                                                .withValues(alpha: 0.1),
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                          ),
-                                          child: const Text(
-                                            'Pending',
-                                            style: TextStyle(
-                                                fontSize: 11,
-                                                color: _textSecondary),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 6),
-                                    Text(
-                                      '描述：${task.note?.isNotEmpty == true ? task.note! : "（無描述）"}',
-                                      style: const TextStyle(
-                                          fontSize: 13,
-                                          color: _textSecondary),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      timeStr,
-                                      style: const TextStyle(
-                                          fontSize: 11,
-                                          color: _textSecondary),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              TextButton(
-                                onPressed: () =>
-                                    _showTaskDetail(task, dist, color),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: color,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 6),
-                                ),
-                                child: const Text('查看更多',
-                                    style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w700)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
+          if (done.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            _sectionLabel('已完成', done.length, _green),
+            const SizedBox(height: 8),
+            ...done.map((t) => _taskCard(t)),
+          ],
+
+          if (tasks.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 60),
+              child: Center(
+                child: Text('附近目前無求助任務', style: TextStyle(color: _textSecondary)),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  // ── 任務詳細底部面板 ─────────────────────────────────────
-  void _showTaskDetail(EmergencyTask task, double distKm, Color typeColor) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => Container(
-        padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
-        decoration: const BoxDecoration(
-          color: Color(0xFFFEFDF9),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+  Widget _sectionLabel(String label, int count, Color color) {
+    return Row(
+      children: [
+        Container(
+          width: 3,
+          height: 14,
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2)),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 拖曳條
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2)),
+        const SizedBox(width: 8),
+        Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color, letterSpacing: 1)),
+        const SizedBox(width: 6),
+        Text('$count 筆', style: TextStyle(fontSize: 12, color: color.withValues(alpha: 0.7))),
+      ],
+    );
+  }
+
+  Widget _taskCard(MutualAidTask task) {
+    final color = _injuryColor(task.injury);
+    final isDone = task.status == TaskStatus.done;
+    final isAccepted = task.status == TaskStatus.accepted;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GestureDetector(
+        onTap: isDone ? null : () => _showTaskDetail(task),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isDone ? _bg : _card,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: isAccepted ? _purple.withValues(alpha: 0.4) : const Color(0xFFE8E0D5),
+              width: isAccepted ? 1.5 : 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
               ),
-            ),
-            const SizedBox(height: 20),
-
-            const Text('急救任務詳情',
-                style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: _textPrimary)),
-            const SizedBox(height: 16),
-
-            // 任務狀態
-            _DetailRow(
-              icon: Icons.pending_actions_rounded,
-              label: '任務狀態',
-              value: '待協助（Pending）',
-              valueColor: const Color(0xFFBF7A5A),
-            ),
-            // 急救類型
-            _DetailRow(
-              icon: Icons.emergency_rounded,
-              label: '急救類型',
-              value: task.type,
-              valueColor: typeColor,
-            ),
-            // 描述
-            _DetailRow(
-              icon: Icons.notes_rounded,
-              label: '描述',
-              value: task.note?.isNotEmpty == true ? task.note! : '（無描述）',
-            ),
-            // 距離
-            _DetailRow(
-              icon: Icons.social_distance_rounded,
-              label: '你與病患距離',
-              value: distKm < 1
-                  ? '約 ${(distKm * 1000).round()} 公尺'
-                  : '約 ${distKm.toStringAsFixed(1)} 公里',
-              valueColor: const Color(0xFF4A90D9),
-            ),
-
-            const SizedBox(height: 24),
-
-            // 前往協助按鈕
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  setState(() => task.status = TaskStatus.helped);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: const Row(
-                        children: [
-                          Icon(Icons.check_circle_rounded,
-                              color: Colors.white, size: 18),
-                          SizedBox(width: 8),
-                          Text('已回報管理端，謝謝你的協助！'),
+            ],
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: isDone ? 0.06 : 0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(_injuryIcon(task.injury), color: color.withValues(alpha: isDone ? 0.4 : 1), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          task.name,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: isDone ? _textSecondary : _textPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withValues(alpha: isDone ? 0.06 : 0.1),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            task.injury,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: color.withValues(alpha: isDone ? 0.5 : 1),
+                            ),
+                          ),
+                        ),
+                        if (isAccepted) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _purple.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              '協助中',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: _purple),
+                            ),
+                          ),
                         ],
-                      ),
-                      backgroundColor: _green,
-                      behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      margin: const EdgeInsets.all(16),
-                      duration: const Duration(seconds: 3),
+                      ],
                     ),
-                  );
-                },
-                icon: const Icon(Icons.directions_walk_rounded),
-                label: const Text('前往協助',
-                    style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w800)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _green,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
+                            task.location,
+                            style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.8)),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ),
-
-            const SizedBox(height: 8),
-            const Center(
-              child: Text(
-                '按下「前往協助」後，將通知管理端你正前往協助',
-                style: TextStyle(fontSize: 11, color: _textSecondary),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${task.distanceKm} km',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: isDone ? _textSecondary : _textPrimary,
+                    ),
+                  ),
+                  if (!isDone)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Icon(Icons.chevron_right_rounded, color: _textSecondary, size: 18),
+                    ),
+                  if (isDone)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Icon(Icons.check_circle_rounded, color: _green.withValues(alpha: 0.5), size: 18),
+                    ),
+                ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
-
-  String _formatTime(DateTime dt) {
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 1) return '剛剛';
-    if (diff.inMinutes < 60) return '${diff.inMinutes} 分鐘前';
-    if (diff.inHours < 24) {
-      return '${dt.month}/${dt.day} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    }
-    return '${dt.month}/${dt.day}';
-  }
 }
 
-// ── 詳情列 ───────────────────────────────────────────────
-class _DetailRow extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final Color? valueColor;
+class _TaskDetailSheet extends StatelessWidget {
+  final MutualAidTask task;
+  final Color injuryColor;
+  final VoidCallback onAccept;
+  final VoidCallback onDone;
 
-  const _DetailRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.valueColor,
+  static const _bg = Color(0xFFF7F3EC);
+  static const _card = Color(0xFFFEFDF9);
+  static const _textPrimary = Color(0xFF3D2C1E);
+  static const _textSecondary = Color(0xFF8C7B6E);
+  static const _purple = Color(0xFF9B88B3);
+  static const _green = Color(0xFF7AA67A);
+
+  const _TaskDetailSheet({
+    required this.task,
+    required this.injuryColor,
+    required this.onAccept,
+    required this.onDone,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
+    final isAccepted = task.status == TaskStatus.accepted;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: _bg,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 18, color: const Color(0xFF8C7B6E)),
-          const SizedBox(width: 10),
-          SizedBox(
-            width: 88,
-            child: Text(label,
-                style: const TextStyle(
-                    fontSize: 13, color: Color(0xFF8C7B6E))),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: valueColor ?? const Color(0xFF3D2C1E),
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFFD6CCC2),
+                borderRadius: BorderRadius.circular(2),
               ),
             ),
           ),
+          const SizedBox(height: 20),
+
+          // 標題
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: injuryColor.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.person_rounded, color: injuryColor, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(task.name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _textPrimary)),
+                  Text(task.userId, style: const TextStyle(fontSize: 11, color: _textSecondary)),
+                ],
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: injuryColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: injuryColor.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  task.injury,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: injuryColor),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+
+          // 資訊卡
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _card,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                _infoRow(Icons.location_on_rounded, '位置', task.location),
+                const Divider(height: 18, color: Color(0xFFE8E0D5)),
+                _infoRow(Icons.near_me_rounded, '距離', '${task.distanceKm} 公里'),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // 操作按鈕
+          if (!isAccepted)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onAccept,
+                icon: const Icon(Icons.volunteer_activism_rounded, size: 18),
+                label: const Text('前往協助', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _purple,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 0,
+                ),
+              ),
+            ),
+
+          if (isAccepted) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onDone,
+                icon: const Icon(Icons.check_circle_rounded, size: 18),
+                label: const Text('完成協助', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 0,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: _textSecondary),
+        const SizedBox(width: 8),
+        Text('$label：', style: const TextStyle(fontSize: 13, color: _textSecondary)),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _textPrimary),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── 傷況細項選單 ──────────────────────────────────────────
+class _SubInjurySheet extends StatelessWidget {
+  final String title;
+  final List<String> subOptions;
+  final Color color;
+  final ValueChanged<String> onSelect;
+
+  static const _bg = Color(0xFFF7F3EC);
+  static const _card = Color(0xFFFEFDF9);
+  static const _textPrimary = Color(0xFF3D2C1E);
+  static const _textSecondary = Color(0xFF8C7B6E);
+
+  const _SubInjurySheet({
+    required this.title,
+    required this.subOptions,
+    required this.color,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: _bg,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: const Color(0xFFD6CCC2), borderRadius: BorderRadius.circular(2)),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+              ),
+              const SizedBox(width: 10),
+              const Text('請選擇傷況細項', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text('由輕到重排列，請選擇最符合的項目', style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.7))),
+          const SizedBox(height: 16),
+          ...subOptions.asMap().entries.map((entry) {
+            final i = entry.key;
+            final sub = entry.value;
+            // 嚴重程度漸層：前半段用較淡色，後半段用較深色
+            final severity = (i / (subOptions.length - 1));
+            final itemColor = Color.lerp(color.withValues(alpha: 0.6), color, severity)!;
+            return GestureDetector(
+              onTap: () => onSelect(sub),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+                decoration: BoxDecoration(
+                  color: _card,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: itemColor.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 6, height: 6,
+                      decoration: BoxDecoration(color: itemColor, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(sub, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _textPrimary)),
+                    const Spacer(),
+                    Icon(Icons.chevron_right_rounded, color: _textSecondary.withValues(alpha: 0.4), size: 18),
+                  ],
+                ),
+              ),
+            );
+          }),
         ],
       ),
     );

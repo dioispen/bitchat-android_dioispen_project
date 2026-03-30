@@ -40,31 +40,38 @@ class PacketRelayManager(private val myPeerID: String) {
     suspend fun handlePacketRelay(routed: RoutedPacket) {
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
-        
+
         Log.d(TAG, "Evaluating relay for packet type ${packet.type} from ${peerID} (TTL: ${packet.ttl})")
-        
+
         // Double-check this packet isn't addressed to us
         if (isPacketAddressedToMe(packet)) {
             Log.d(TAG, "Packet addressed to us, skipping relay")
             return
         }
-        
+
         // Skip our own packets
         if (peerID == myPeerID) {
             Log.d(TAG, "Packet from ourselves, skipping relay")
             return
         }
-        
+
         // Check TTL and decrement
         if (packet.ttl == 0u.toUByte()) {
             Log.d(TAG, "TTL expired, not relaying packet")
             return
         }
-        
+
+        // EMERGENCY_MESSAGE 直接全 relay，不做 subset/fanout
+        if (packet.type == MessageType.EMERGENCY_MESSAGE.value) {
+            Log.i(TAG, "🚨 Emergency message relay: broadcasting to all peers (TTL ${packet.ttl})")
+            relayPacket(RoutedPacket(packet.copy(ttl = (packet.ttl - 1u).toUByte()), peerID, routed.relayAddress))
+            return
+        }
+
         // Decrement TTL by 1
         val relayPacket = packet.copy(ttl = (packet.ttl - 1u).toUByte())
         Log.d(TAG, "Decremented TTL from ${packet.ttl} to ${relayPacket.ttl}")
-        
+
         // Source-based routing: if route is set and includes us, try targeted next-hop forwarding
         val route = relayPacket.route
         if (!route.isNullOrEmpty()) {

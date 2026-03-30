@@ -18,6 +18,25 @@ import org.mockito.kotlin.whenever
 @ExperimentalCoroutinesApi
 class PacketRelayManagerTest {
 
+    @Test
+    fun `emergency message is always broadcasted`() = runTest {
+        val packet = BitchatPacket(
+            type = MessageType.EMERGENCY_MESSAGE.value,
+            senderID = hexStringToPeerBytes(otherPeerID),
+            recipientID = null,
+            timestamp = System.currentTimeMillis().toULong(),
+            payload = "emergency".toByteArray(),
+            ttl = 5u,
+            route = null
+        )
+        val routedPacket = RoutedPacket(packet, otherPeerID)
+
+        packetRelayManager.handlePacketRelay(routedPacket)
+
+        verify(delegate, never()).sendToPeer(any(), any())
+        verify(delegate).broadcastPacket(any())
+    }
+
     private lateinit var packetRelayManager: PacketRelayManager
     private val delegate: PacketRelayManagerDelegate = mock()
 

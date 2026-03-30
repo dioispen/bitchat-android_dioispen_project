@@ -141,12 +141,17 @@ class BluetoothPacketBroadcaster(
     ) {
         val packet = routed.packet
         val isFile = packet.type == MessageType.FILE_TRANSFER.value
+        val isEmergency = packet.type == MessageType.EMERGENCY_MESSAGE.value
         if (isFile) {
             Log.d(TAG, "📤 Broadcasting FILE_TRANSFER: ${packet.payload.size} bytes")
         }
-        // Prefer caller-provided transferId (e.g., for encrypted media), else derive for FILE_TRANSFER
+        // EMERGENCY_MESSAGE: 全連線廣播，跳過 subset/fanout，直接全發送
+        if (isEmergency) {
+            broadcastSinglePacket(routed, gattServer, characteristic)
+            return
+        }
+        // 其餘維持原有 fragment/fanout 行為
         val transferId = routed.transferId ?: (if (isFile) sha256Hex(packet.payload) else null)
-        // Check if we need to fragment
         if (fragmentManager != null) {
             val fragments = try {
                 fragmentManager.createFragments(packet)
@@ -188,7 +193,6 @@ class BluetoothPacketBroadcaster(
                 return
             }
         }
-        
         // Send single packet if no fragmentation needed
         if (transferId != null) {
             TransferProgressManager.start(transferId, 1)

@@ -35,6 +35,27 @@ import kotlin.random.Random
  * - PacketProcessor: Incoming packet routing
  */
 class BluetoothMeshService(private val context: Context) {
+        /**
+         * 發送緊急訊息（全連線廣播，不經 K-of-N）
+         */
+        fun sendEmergencyMessage(content: String) {
+            if (content.isEmpty()) return
+            serviceScope.launch {
+                val packet = BitchatPacket(
+                    version = 1u,
+                    type = MessageType.EMERGENCY_MESSAGE.value,
+                    senderID = hexStringToByteArray(myPeerID),
+                    recipientID = SpecialRecipients.BROADCAST,
+                    timestamp = System.currentTimeMillis().toULong(),
+                    payload = content.toByteArray(Charsets.UTF_8),
+                    signature = null,
+                    ttl = MAX_TTL
+                )
+                val signedPacket = signPacketBeforeBroadcast(packet)
+                connectionManager.broadcastPacket(RoutedPacket(signedPacket))
+                try { gossipSyncManager.onPublicPacketSeen(signedPacket) } catch (_: Exception) { }
+            }
+        }
     private val debugManager by lazy { try { com.bitchat.android.ui.debug.DebugSettingsManager.getInstance() } catch (e: Exception) { null } }
     
     companion object {
@@ -700,13 +721,13 @@ class BluetoothMeshService(private val context: Context) {
     /**
      * Send public message
      */
-    fun sendMessage(content: String, mentions: List<String> = emptyList(), channel: String? = null) {
+    fun sendMessage(content: String, mentions: List<String> = emptyList(), channel: String? = null, isEmergency: Boolean = false) {
         if (content.isEmpty()) return
-        
         serviceScope.launch {
+            val type = if (isEmergency) MessageType.EMERGENCY_MESSAGE.value else MessageType.MESSAGE.value
             val packet = BitchatPacket(
                 version = 1u,
-                type = MessageType.MESSAGE.value,
+                type = type,
                 senderID = hexStringToByteArray(myPeerID),
                 recipientID = SpecialRecipients.BROADCAST,
                 timestamp = System.currentTimeMillis().toULong(),
@@ -714,11 +735,8 @@ class BluetoothMeshService(private val context: Context) {
                 signature = null,
                 ttl = MAX_TTL
             )
-
-            // Sign the packet before broadcasting
             val signedPacket = signPacketBeforeBroadcast(packet)
             connectionManager.broadcastPacket(RoutedPacket(signedPacket))
-            // Track our own broadcast message for sync
             try { gossipSyncManager.onPublicPacketSeen(signedPacket) } catch (_: Exception) { }
         }
     }

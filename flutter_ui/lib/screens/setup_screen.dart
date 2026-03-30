@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/user.dart';
 import '../bridge/bitchat_bridge.dart';
 import 'register_screen.dart';
 import 'home_screen.dart';
@@ -23,14 +27,13 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // 移除本地監聽器，改由 main.dart 的全局監聽處理彈窗
     _startSetup();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stopTasks(); // 確保銷毀時停止所有任務
+    _stopTasks();
     super.dispose();
   }
 
@@ -42,7 +45,6 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 當使用者從系統設定授權回來時，自動重新檢查
     if (state == AppLifecycleState.resumed && _hasError) {
       _startSetup();
     }
@@ -57,7 +59,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       _statusText = '檢查必要權限與服務狀態...';
     });
 
-    // 1. 檢查權限 (通知、藍牙相關、位置)
+    // 1. 檢查權限
     bool hasPermissions = await BitchatBridge.checkPermissions();
     if (!hasPermissions) {
       setState(() {
@@ -80,7 +82,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       return;
     }
 
-    // 3. 開始搜尋附近裝置
+    // 3. 開始搜尋附近裝置並進行註冊檢查
     setState(() {
       _isSearching = true;
       _statusText = '正在搜尋附近裝置...';
@@ -95,8 +97,8 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
         });
       }
       
-      // 搜尋 6 秒後繼續
-      if (timer.tick >= 3) {
+      // 搜尋滿 2 秒（即第一次 Tick）後，就開始執行註冊狀態檢查，不用等待太久
+      if (timer.tick >= 1) {
         _checkRegistration();
       }
     });
@@ -105,23 +107,63 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
   Future<void> _checkRegistration() async {
     if (!mounted) return;
     
-    // 重要：在導航前立即停止所有背景任務，解決 BLASTBufferQueue 問題
+    // 導航前停止 Timer
     _stopTasks();
     
     setState(() {
-      _statusText = '檢查註冊狀態...';
+      _statusText = '驗證身分中...';
     });
 
-    // 給予渲染引擎短暫緩衝時間處理狀態變更
-    await Future.delayed(const Duration(milliseconds: 500));
-    bool registered = await BitchatBridge.isRegistered();
+    bool isRegisteredInCloud = false;
+    bool hasLocalData = false;
+
+    try {
+      // Step A: 檢查原生層密鑰
+      bool nativeRegistered = await BitchatBridge.isRegistered();
+      debugPrint('DEBUG: Native registration status: $nativeRegistered');
+
+      if (nativeRegistered) {
+        // Step B: 檢查本地 SharedPreferences 資料
+        final prefs = await SharedPreferences.getInstance();
+        final userJson = prefs.getString('app_user');
+        
+        if (userJson != null) {
+          hasLocalData = true;
+          final user = AppUser.fromJson(jsonDecode(userJson));
+          debugPrint('DEBUG: Local user found: ${user.id}');
+
+          // Step C: 比對 Cloud Firestore
+          // 設定超時，避免網路不穩時卡死
+          final cloudDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(user.id)
+              .get()
+              .timeout(const Duration(seconds: 5));
+
+          if (cloudDoc.exists) {
+            isRegisteredInCloud = true;
+            debugPrint('DEBUG: Cloud registration verified.');
+          } else {
+            debugPrint('DEBUG: User ID ${user.id} not found in Firestore.');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('DEBUG: Registration check failed or timed out: $e');
+      // 如果是網路超時，但本地已有資料，我們採取寬鬆策略允許進入首頁 (離線模式)
+      if (hasLocalData) {
+        debugPrint('DEBUG: Proceeding in offline mode with local data.');
+        isRegisteredInCloud = true; 
+      }
+    }
 
     if (mounted) {
-      if (registered) {
+      if (isRegisteredInCloud) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const HomeScreen()),
         );
       } else {
+        // 若完全沒有雲端紀錄且非離線寬鬆情況，導向註冊頁
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const RegisterScreen()),
         );

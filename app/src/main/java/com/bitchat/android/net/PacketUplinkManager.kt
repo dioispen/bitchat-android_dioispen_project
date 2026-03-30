@@ -23,7 +23,7 @@ class PacketUplinkManager(private val context: Context) {
 
     companion object {
         private const val TAG = "PacketUplinkManager"
-        private const val UPLINK_URL = "https://delphine-eisteddfodic-afflictively.ngrok-free.dev"
+        private const val UPLINK_URL = "https://delphine-eisteddfodic-afflictively.ngrok-free.dev/health-report"
         private val MEDIA_TYPE_OCTET_STREAM = "application/octet-stream".toMediaType()
     }
 

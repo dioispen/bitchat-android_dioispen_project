@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user.dart';
+import '../services/auth_service.dart';
 import 'home_screen.dart';
 
 const _prefsKeyUser = 'app_user';
@@ -21,8 +23,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
   static const _brown = Color(0xFF5C3D2E);
 
   final _pageController = PageController();
+  final AuthService _authService = AuthService();
   int _currentStep = 0;
   bool _isSaving = false;
+
+  // Step 0：帳號密碼 (Firebase Auth)
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _step0Key = GlobalKey<FormState>();
 
   // Step 1：基本資料
   final _nameCtrl = TextEditingController();
@@ -43,6 +51,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   void dispose() {
     _pageController.dispose();
+    _emailCtrl.dispose();
+    _passwordCtrl.dispose();
     _nameCtrl.dispose();
     _phoneCtrl.dispose();
     _areaCtrl.dispose();
@@ -54,10 +64,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   void _nextStep() {
-    if (_currentStep == 0 && !_step1Key.currentState!.validate()) return;
-    if (_currentStep == 1 && !_step2Key.currentState!.validate()) return;
+    if (_currentStep == 0 && !_step0Key.currentState!.validate()) return;
+    if (_currentStep == 1 && !_step1Key.currentState!.validate()) return;
+    if (_currentStep == 2 && !_step2Key.currentState!.validate()) return;
 
-    if (_currentStep < 2) {
+    if (_currentStep < 3) {
       _pageController.nextPage(
         duration: const Duration(milliseconds: 350),
         curve: Curves.easeInOut,
@@ -81,8 +92,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _submit() async {
     setState(() => _isSaving = true);
     try {
+      // 1. Firebase Auth 註冊
+      final userModel = await _authService.registerWithEmailAndPassword(
+        _emailCtrl.text.trim(),
+        _passwordCtrl.text.trim(),
+      );
+
+      if (userModel == null) {
+        throw Exception('帳號註冊失敗，請稍後再試');
+      }
+
+      // 2. 建立 AppUser 物件 (使用 Firebase UID 作為 ID)
       final user = AppUser(
-        id: AppUser.generateId(),
+        id: userModel.uid,
+        email: userModel.email,
         name: _nameCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
         area: _areaCtrl.text.trim(),
@@ -94,11 +117,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
         registeredAt: DateTime.now(),
       );
 
-      // 存到本機
+      // 3. 存到本機
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefsKeyUser, jsonEncode(user.toJson()));
 
-      // 存到 Firestore 雲端
+      // 4. 存到 Firestore 雲端
       await FirebaseFirestore.instance
           .collection('users')
           .doc(user.id)
@@ -113,7 +136,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('註冊失敗：$e'),
+            content: Text('註冊失敗：${e.toString()}'),
             backgroundColor: const Color(0xFFC4553A),
             behavior: SnackBarBehavior.floating,
             margin: const EdgeInsets.all(16),
@@ -141,6 +164,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
                 children: [
+                  _Step0Account(
+                    formKey: _step0Key,
+                    emailCtrl: _emailCtrl,
+                    passwordCtrl: _passwordCtrl,
+                  ),
                   _Step1BasicInfo(
                     formKey: _step1Key,
                     nameCtrl: _nameCtrl,
@@ -185,7 +213,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
                           : Text(
-                              _currentStep < 2 ? '下一步' : '完成註冊',
+                              _currentStep < 3 ? '下一步' : '完成註冊',
                               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                             ),
                     ),
@@ -197,12 +225,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       child: const Text('返回上一步', style: TextStyle(color: _textSecondary)),
                     ),
                   ],
-                  if (_currentStep == 2) ...[
+                  if (_currentStep == 3) ...[
                     const SizedBox(height: 4),
                     TextButton(
                       onPressed: _isSaving ? null : _submit,
                       child: Text('略過健康資訊，直接完成',
-                          style: TextStyle(color: _textSecondary.withValues(alpha: 0.7), fontSize: 13)),
+                          style: TextStyle(color: _textSecondary.withAlpha(178), fontSize: 13)),
                     ),
                   ],
                 ],
@@ -220,8 +248,8 @@ class _StepHeader extends StatelessWidget {
   final int currentStep;
   const _StepHeader({required this.currentStep});
 
-  static const _steps = ['基本資料', '緊急聯絡人', '健康資訊'];
-  static const _icons = [Icons.person_rounded, Icons.contact_phone_rounded, Icons.favorite_rounded];
+  static const _steps = ['帳號', '基本資料', '緊急聯絡', '健康資訊'];
+  static const _icons = [Icons.vpn_key_rounded, Icons.person_rounded, Icons.contact_phone_rounded, Icons.favorite_rounded];
 
   @override
   Widget build(BuildContext context) {
@@ -247,7 +275,7 @@ class _StepHeader extends StatelessWidget {
             children: List.generate(_steps.length, (i) {
               final isDone = i < currentStep;
               final isActive = i == currentStep;
-              final color = isDone || isActive ? green : textSecondary.withValues(alpha: 0.3);
+              final color = isDone || isActive ? green : textSecondary.withAlpha(76);
 
               return Expanded(
                 child: Row(
@@ -256,11 +284,11 @@ class _StepHeader extends StatelessWidget {
                       child: Column(
                         children: [
                           Container(
-                            width: 40,
-                            height: 40,
+                            width: 36,
+                            height: 36,
                             decoration: BoxDecoration(
                               color: isDone || isActive
-                                  ? green.withValues(alpha: isActive ? 1 : 0.15)
+                                  ? green.withAlpha(isActive ? 255 : 38)
                                   : Colors.transparent,
                               shape: BoxShape.circle,
                               border: Border.all(color: color, width: 1.5),
@@ -268,15 +296,15 @@ class _StepHeader extends StatelessWidget {
                             child: Icon(
                               isDone ? Icons.check_rounded : _icons[i],
                               color: isDone ? Colors.white : color,
-                              size: 20,
+                              size: 18,
                             ),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             _steps[i],
                             style: TextStyle(
-                              fontSize: 11,
-                              color: isActive ? green : textSecondary.withValues(alpha: isDone ? 0.8 : 0.4),
+                              fontSize: 10,
+                              color: isActive ? green : textSecondary.withAlpha(isDone ? 204 : 102),
                               fontWeight: isActive ? FontWeight.w700 : FontWeight.normal,
                             ),
                           ),
@@ -289,8 +317,8 @@ class _StepHeader extends StatelessWidget {
                           height: 1.5,
                           margin: const EdgeInsets.only(bottom: 22),
                           color: i < currentStep
-                              ? green.withValues(alpha: 0.5)
-                              : textSecondary.withValues(alpha: 0.2),
+                              ? green.withAlpha(127)
+                              : textSecondary.withAlpha(51),
                         ),
                       ),
                   ],
@@ -299,6 +327,51 @@ class _StepHeader extends StatelessWidget {
             }),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Step 0：帳號設定 ──────────────────────────────────────
+class _Step0Account extends StatelessWidget {
+  final GlobalKey<FormState> formKey;
+  final TextEditingController emailCtrl, passwordCtrl;
+  const _Step0Account({required this.formKey, required this.emailCtrl, required this.passwordCtrl});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: 24),
+      child: Form(
+        key: formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const _SectionTitle('設定登入帳號', '請使用電子郵件註冊，以便同步您的資料'),
+            const SizedBox(height: 24),
+            _InputField(
+              label: '電子郵件',
+              controller: emailCtrl,
+              hint: 'example@email.com',
+              icon: Icons.email_outlined,
+              keyboardType: TextInputType.emailAddress,
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return '請輸入電子郵件';
+                if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$').hasMatch(v)) return '格式不正確';
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            _InputField(
+              label: '密碼',
+              controller: passwordCtrl,
+              hint: '至少 6 位字元',
+              icon: Icons.lock_outline_rounded,
+              obscureText: true,
+              validator: (v) => (v == null || v.length < 6) ? '密碼長度需大於 6 位' : null,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -319,7 +392,7 @@ class _Step1BasicInfo extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const _SectionTitle('請輸入你的基本資料', '管理端在緊急狀況時將透過此資料聯繫你'),
+            const _SectionTitle('基本個人資料', '管理端在緊急狀況時將透過此資料聯繫你'),
             const SizedBox(height: 24),
             _InputField(
               label: '姓名',
@@ -453,7 +526,7 @@ class _Step3HealthInfo extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: selected ? green : Colors.transparent,
                     borderRadius: BorderRadius.circular(30),
-                    border: Border.all(color: selected ? green : textSecondary.withValues(alpha: 0.3)),
+                    border: Border.all(color: selected ? green : textSecondary.withAlpha(76)),
                   ),
                   child: Text(
                     bt,
@@ -482,7 +555,7 @@ class _Step3HealthInfo extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: green.withValues(alpha: 0.08),
+              color: green.withAlpha(20),
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Row(
@@ -533,6 +606,7 @@ class _InputField extends StatelessWidget {
   final List<TextInputFormatter>? inputFormatters;
   final String? Function(String?)? validator;
   final int maxLines;
+  final bool obscureText;
 
   const _InputField({
     required this.label,
@@ -543,6 +617,7 @@ class _InputField extends StatelessWidget {
     this.inputFormatters,
     this.validator,
     this.maxLines = 1,
+    this.obscureText = false,
   });
 
   @override
@@ -559,20 +634,21 @@ class _InputField extends StatelessWidget {
           inputFormatters: inputFormatters,
           validator: validator,
           maxLines: maxLines,
+          obscureText: obscureText,
           style: const TextStyle(fontSize: 15, color: Color(0xFF3D2C1E)),
           decoration: InputDecoration(
             hintText: hint,
-            hintStyle: TextStyle(color: const Color(0xFF8C7B6E).withValues(alpha: 0.6), fontSize: 14),
+            hintStyle: TextStyle(color: const Color(0xFF8C7B6E).withAlpha(153), fontSize: 14),
             prefixIcon: Icon(icon, size: 20, color: const Color(0xFF8C7B6E)),
             filled: true,
             fillColor: const Color(0xFFFEFDF9),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: const Color(0xFF8C7B6E).withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: const Color(0xFF8C7B6E).withAlpha(51)),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
-              borderSide: BorderSide(color: const Color(0xFF8C7B6E).withValues(alpha: 0.2)),
+              borderSide: BorderSide(color: const Color(0xFF8C7B6E).withAlpha(51)),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),

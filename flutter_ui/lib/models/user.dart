@@ -1,7 +1,8 @@
 import 'dart:math';
 
 class AppUser {
-  final String id;                       // 系統產生的 User ID
+  final String id;                       // Firebase Auth UID
+  final String? email;                   // 電子郵件
   final String name;                     // 姓名
   final String phone;                    // 手機號碼
   final String area;                     // 居住區域
@@ -14,6 +15,7 @@ class AppUser {
 
   AppUser({
     required this.id,
+    this.email,
     required this.name,
     required this.phone,
     required this.area,
@@ -25,16 +27,9 @@ class AppUser {
     required this.registeredAt,
   });
 
-  /// 產生唯一 User ID
-  static String generateId() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    final rand = Random();
-    final code = List.generate(6, (_) => chars[rand.nextInt(chars.length)]).join();
-    return 'UID-$code';
-  }
-
   Map<String, dynamic> toJson() => {
         'id': id,
+        'email': email,
         'name': name,
         'phone': phone,
         'area': area,
@@ -48,6 +43,7 @@ class AppUser {
 
   factory AppUser.fromJson(Map<String, dynamic> json) => AppUser(
         id: json['id'] as String,
+        email: json['email'] as String?,
         name: json['name'] as String,
         phone: json['phone'] as String,
         area: json['area'] as String,

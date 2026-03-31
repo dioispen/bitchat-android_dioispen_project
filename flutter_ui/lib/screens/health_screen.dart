@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import '../models/user.dart';
 import '../models/health_report.dart';
@@ -49,6 +50,7 @@ class HealthScreen extends StatefulWidget {
 
 class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderStateMixin {
   final HealthService _healthService = HealthService();
+  final FirebaseAuth _auth = FirebaseAuth.instance;
   String _selectedStatus = '尚未回報';
   String? _selectedSubInjury;
   late TabController _tabController;
@@ -120,14 +122,22 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
 
   void _listenToBridge() {
     _bridgeSubscription = BitchatBridge.events().listen((event) {
-      if (event['type'] == 'disaster_report') {
-        final reportData = event['report'];
+      // 修正：檢查事件類型為 'bluetooth_packet' 且封包類型為 'health_report'
+      // 或是直接由 Bridge 轉發的 'disaster_report'
+      if (event['type'] == 'disaster_report' || event['type'] == 'bluetooth_packet') {
+        Map<String, dynamic>? reportData;
+        
+        if (event['type'] == 'disaster_report') {
+          reportData = Map<String, dynamic>.from(event['report']);
+        } else if (event['packet'] != null && event['packet']['type'] == 1) { // 假設 1 是 Health Report
+          reportData = Map<String, dynamic>.from(event['packet']['data']);
+        }
+
         if (reportData != null) {
-          final report = HealthReport.fromJson(Map<String, dynamic>.from(reportData));
+          final report = HealthReport.fromJson(reportData);
           if (report.reporterId == _currentUserId) return;
 
           setState(() {
-            // 檢查是否已存在
             final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
             
             double distanceKm = 0;
@@ -148,7 +158,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                   ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
                   : '位置未提供',
               distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
-              note: report.description ?? '來自 BLE 廣播',
+              note: report.description ?? '來自現場藍牙廣播',
               isBle: true,
             );
 
@@ -164,20 +174,23 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   }
 
   Future<void> _loadUserAndPosition() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userJson = prefs.getString('app_user');
-    if (userJson != null) {
-      final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
-      if (mounted) setState(() => _currentUserId = user.id);
+    // 優先從 Firebase Auth 獲取當前 UID
+    final currentUser = _auth.currentUser;
+    if (currentUser != null) {
+      if (mounted) setState(() => _currentUserId = currentUser.uid);
     }
+
+    final prefs = await SharedPreferences.getInstance();
     final savedStatus = prefs.getString('health_status');
     final savedSub = prefs.getString('health_sub_injury');
+    
     if (mounted) {
       setState(() {
         if (savedStatus != null) _selectedStatus = savedStatus;
         _selectedSubInjury = savedSub;
       });
     }
+
     try {
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -195,6 +208,8 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
     _tasksSubscription = FirebaseFirestore.instance
         .collection('health_reports')
         .where('status', whereIn: ['輕傷', '重傷'])
+        .orderBy('reportTime', descending: true)
+        .limit(50)
         .snapshots()
         .listen((snapshot) {
           if (mounted) setState(() => _firestoreDocs = snapshot.docs);
@@ -240,7 +255,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
     
     allTasks.addAll(firestoreTasks);
 
-    // 加入 BLE 任務 (去重：如果同一個 UserID 已經有 Firestore 任務，以 Firestore 為主)
+    // 加入 BLE 任務 (去重)
     for (var bleTask in _bleTasks) {
       if (!allTasks.any((t) => t.userId == bleTask.userId)) {
         bleTask.status = _taskStatusOverrides[bleTask.id] ?? TaskStatus.waiting;
@@ -281,7 +296,6 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
   }
 
   Future<void> _select(String status, String? subInjury) async {
-    _healthService.updateStatus(status);
     setState(() {
       _selectedStatus = status;
       _selectedSubInjury = subInjury;
@@ -295,12 +309,14 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
       } else {
         await prefs.remove('health_sub_injury');
       }
+
       final userJson = prefs.getString('app_user');
-      if (userJson == null) return;
+      if (userJson == null || _auth.currentUser == null) throw Exception('請先完成註冊');
+      
       final user = AppUser.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
 
       final report = HealthReport(
-        reporterId: user.id,
+        reporterId: _auth.currentUser!.uid, // 修正：使用 Auth UID
         name: user.name,
         phone: user.phone,
         bloodType: user.bloodType,
@@ -313,20 +329,22 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
 
       final reportJson = report.toJson();
 
-      // 如果受傷，則透過 BLE 廣播
+      // 1. BLE 廣播 (受傷時)
       if (status == '輕傷' || status == '重傷') {
         await BitchatBridge.sendHealthReport(reportJson);
       }
 
-      // 上傳到 Firebase (原本邏輯保留)
+      // 2. 上傳到 Firestore (使用 Auth UID 作為文件 ID 或子項)
+      // 這裡建議用 UID 作為 Document ID 或在 collection 中新增
       await FirebaseFirestore.instance
           .collection('health_reports')
-          .add(reportJson);
+          .doc(_auth.currentUser!.uid) // 使用 UID 覆蓋舊狀態，保持最新
+          .set(reportJson);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('已回報：$status'),
+            content: Text('已成功回報狀態：$status'),
             backgroundColor: _statusColor(),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -338,7 +356,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('回報失敗：$e'),
+            content: Text('回報失敗：${e.toString()}'),
             backgroundColor: _red,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -466,7 +484,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                 borderRadius: BorderRadius.circular(20),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
+                    color: const Color(0xFF3D2C1E).withAlpha(13),
                     blurRadius: 12,
                     offset: const Offset(0, 3),
                   ),
@@ -477,7 +495,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: _statusColor().withValues(alpha: 0.12),
+                      color: _statusColor().withAlpha(31),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
@@ -506,7 +524,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                         const SizedBox(height: 2),
                         Text(
                           _selectedSubInjury!,
-                          style: TextStyle(fontSize: 13, color: _statusColor().withValues(alpha: 0.8)),
+                          style: TextStyle(fontSize: 13, color: _statusColor().withAlpha(204)),
                         ),
                       ],
                     ],
@@ -539,23 +557,23 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                       duration: const Duration(milliseconds: 200),
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                       decoration: BoxDecoration(
-                        color: isSelected ? color.withValues(alpha: 0.08) : _card,
+                        color: isSelected ? color.withAlpha(20) : _card,
                         borderRadius: BorderRadius.circular(18),
                         border: Border.all(
-                          color: isSelected ? color.withValues(alpha: 0.6) : const Color(0xFFE8E0D5),
+                          color: isSelected ? color.withAlpha(153) : const Color(0xFFE8E0D5),
                           width: 1.5,
                         ),
                         boxShadow: isSelected
                             ? [
                                 BoxShadow(
-                                  color: color.withValues(alpha: 0.12),
+                                  color: color.withAlpha(31),
                                   blurRadius: 10,
                                   offset: const Offset(0, 3),
                                 ),
                               ]
                             : [
                                 BoxShadow(
-                                  color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
+                                  color: const Color(0xFF3D2C1E).withAlpha(10),
                                   blurRadius: 8,
                                   offset: const Offset(0, 2),
                                 ),
@@ -566,7 +584,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                           Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: color.withValues(alpha: 0.12),
+                              color: color.withAlpha(31),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Icon(option['icon'] as IconData, color: color, size: 22),
@@ -623,9 +641,9 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: _purple.withValues(alpha: 0.08),
+              color: _purple.withAlpha(20),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _purple.withValues(alpha: 0.25)),
+              border: Border.all(color: _purple.withAlpha(64)),
             ),
             child: Row(
               children: [
@@ -685,7 +703,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
         const SizedBox(width: 8),
         Text(label, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color, letterSpacing: 1)),
         const SizedBox(width: 6),
-        Text('$count 筆', style: TextStyle(fontSize: 12, color: color.withValues(alpha: 0.7))),
+        Text('$count 筆', style: TextStyle(fontSize: 12, color: color.withAlpha(178))),
       ],
     );
   }
@@ -705,12 +723,12 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
             color: isDone ? _bg : _card,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: isAccepted ? _purple.withValues(alpha: 0.4) : const Color(0xFFE8E0D5),
+              color: isAccepted ? _purple.withAlpha(102) : const Color(0xFFE8E0D5),
               width: isAccepted ? 1.5 : 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF3D2C1E).withValues(alpha: 0.04),
+                color: const Color(0xFF3D2C1E).withAlpha(10),
                 blurRadius: 8,
                 offset: const Offset(0, 2),
               ),
@@ -721,10 +739,10 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
               Container(
                 padding: const EdgeInsets.all(9),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: isDone ? 0.06 : 0.12),
+                  color: color.withAlpha(isDone ? 15 : 31),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(_injuryIcon(task.injury), color: color.withValues(alpha: isDone ? 0.4 : 1), size: 20),
+                child: Icon(_injuryIcon(task.injury), color: color.withAlpha(isDone ? 102 : 255), size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -745,7 +763,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
-                            color: color.withValues(alpha: isDone ? 0.06 : 0.1),
+                            color: color.withAlpha(isDone ? 15 : 26),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
@@ -753,7 +771,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w600,
-                              color: color.withValues(alpha: isDone ? 0.5 : 1),
+                              color: color.withAlpha(isDone ? 127 : 255),
                             ),
                           ),
                         ),
@@ -762,7 +780,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                             decoration: BoxDecoration(
-                              color: _purple.withValues(alpha: 0.1),
+                              color: _purple.withAlpha(26),
                               borderRadius: BorderRadius.circular(6),
                             ),
                             child: const Text(
@@ -780,12 +798,12 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                     const SizedBox(height: 3),
                     Row(
                       children: [
-                        Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withValues(alpha: 0.7)),
+                        Icon(Icons.location_on_rounded, size: 12, color: _textSecondary.withAlpha(178)),
                         const SizedBox(width: 3),
                         Expanded(
                           child: Text(
                             task.location,
-                            style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.8)),
+                            style: TextStyle(fontSize: 12, color: _textSecondary.withAlpha(204)),
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -814,7 +832,7 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
                   if (isDone)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Icon(Icons.check_circle_rounded, color: _green.withValues(alpha: 0.5), size: 18),
+                      child: Icon(Icons.check_circle_rounded, color: _green.withAlpha(127), size: 18),
                     ),
                 ],
               ),
@@ -878,7 +896,7 @@ class _TaskDetailSheet extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: injuryColor.withValues(alpha: 0.12),
+                  color: injuryColor.withAlpha(31),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(Icons.person_rounded, color: injuryColor, size: 24),
@@ -895,9 +913,9 @@ class _TaskDetailSheet extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: injuryColor.withValues(alpha: 0.1),
+                  color: injuryColor.withAlpha(26),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: injuryColor.withValues(alpha: 0.3)),
+                  border: Border.all(color: injuryColor.withAlpha(76)),
                 ),
                 child: Text(
                   task.injury,
@@ -918,7 +936,7 @@ class _TaskDetailSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
+                  color: const Color(0xFF3D2C1E).withAlpha(13),
                   blurRadius: 10,
                   offset: const Offset(0, 3),
                 ),
@@ -1040,7 +1058,7 @@ class _SubInjurySheet extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
+                  color: color.withAlpha(31),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color)),
@@ -1050,14 +1068,13 @@ class _SubInjurySheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          Text('由輕到重排列，請選擇最符合的項目', style: TextStyle(fontSize: 12, color: _textSecondary.withValues(alpha: 0.7))),
+          Text('由輕到重排列，請選擇最符合的項目', style: TextStyle(fontSize: 12, color: _textSecondary.withAlpha(178))),
           const SizedBox(height: 16),
           ...subOptions.asMap().entries.map((entry) {
             final i = entry.key;
             final sub = entry.value;
-            // 嚴重程度漸層：前半段用較淡色，後半段用較深色
             final severity = (i / (subOptions.length - 1));
-            final itemColor = Color.lerp(color.withValues(alpha: 0.6), color, severity)!;
+            final itemColor = Color.lerp(color.withAlpha(153), color, severity)!;
             return GestureDetector(
               onTap: () => onSelect(sub),
               child: Container(
@@ -1066,7 +1083,7 @@ class _SubInjurySheet extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: _card,
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: itemColor.withValues(alpha: 0.3)),
+                  border: Border.all(color: itemColor.withAlpha(76)),
                 ),
                 child: Row(
                   children: [
@@ -1077,7 +1094,7 @@ class _SubInjurySheet extends StatelessWidget {
                     const SizedBox(width: 12),
                     Text(sub, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: _textPrimary)),
                     const Spacer(),
-                    Icon(Icons.chevron_right_rounded, color: _textSecondary.withValues(alpha: 0.4), size: 18),
+                    Icon(Icons.chevron_right_rounded, color: _textSecondary.withAlpha(102), size: 18),
                   ],
                 ),
               ),

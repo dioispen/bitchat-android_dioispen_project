@@ -1,6 +1,7 @@
 package com.bitchat.android.net
 
 import android.content.Context
+import android.util.Log
 import com.bitchat.android.R
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -33,41 +34,40 @@ object OkHttpProvider {
 
         val builder = OkHttpClient.Builder()
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
-            // 增加超時時間，適應 ngrok 或不穩定的內網環境
             .callTimeout(30, TimeUnit.SECONDS)
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .writeTimeout(20, TimeUnit.SECONDS)
-            // 即使是用 ngrok，保留 hostnameVerifier 對於測試環境也比較安全
-            .hostnameVerifier { _, _ -> true }
+            .hostnameVerifier { _, _ -> true } // 已經允許所有主機名，這對 ngrok 是正確的
 
         if (context != null) {
             try {
-                // 1. 載入 res/raw 中的 .pem 憑證
-                val certInputStream = context.resources.openRawResource(R.raw.cert)
+                // 嘗試從 R.raw.cert 載入自定義憑證
+                val certInputStream = context.resources.openRawResource(R.raw.server)
                 val cf = CertificateFactory.getInstance("X.509")
                 val ca = cf.generateCertificate(certInputStream)
                 certInputStream.close()
 
-                // 2. 建立 KeyStore
                 val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
                     load(null, null)
                     setCertificateEntry("ca", ca)
                 }
 
-                // 3. 建立 TrustManager
                 val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply {
                     init(keyStore)
                 }
 
+                // 注意：這裡只會信任該 pem。
+                // 如果是 ngrok，建議如果是正式憑證，則不應進入此自定義 SSL 邏輯，
+                // 或者將系統憑證也加入 KeyStore。
+
                 val sslContext = SSLContext.getInstance("TLS").apply {
                     init(null, tmf.trustManagers, null)
                 }
-
                 builder.sslSocketFactory(sslContext.socketFactory, tmf.trustManagers[0] as X509TrustManager)
             } catch (e: Exception) {
-                // 如果沒找到 cert.pem 或失敗，會退回到系統預設驗證（適用於 ngrok 正式憑證）
-                e.printStackTrace()
+                // 載入失敗時會使用系統預設，這對 ngrok (Let's Encrypt) 來說通常是正確的
+                Log.e("OkHttpProvider", "Custom cert load failed, falling back to system default", e)
             }
         }
 

@@ -8,21 +8,16 @@ import 'screens/setup_screen.dart';
 // 全局 NavigatorKey 用於在沒有 Context 的情況下顯示 Dialog
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() async{
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
-    // 優先檢查是否已有應用程式實例
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
-    } else {
-      // 如果已經存在，則直接使用目前的實例
-      Firebase.app();
     }
   } catch (e) {
-    // 捕獲所有初始化錯誤，避免引擎崩潰
     debugPrint('Firebase initialization warning: $e');
   }
 
@@ -43,10 +38,9 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   @override
   void initState() {
     super.initState();
-    // 使用 addPostFrameCallback 確保 MaterialApp 已構建，Navigator 可用
+    // 確保在第一幀渲染後才開始監聽，此時 navigatorKey.currentContext 才有效
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkInitialStatus();
-      _listenToSystemStatus();
+      _startListeningToSystemStatus();
     });
   }
 
@@ -56,20 +50,13 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
     super.dispose();
   }
 
-  /// 主動檢查一次初始狀態，避免錯過 Stream 的第一次推送
-  Future<void> _checkInitialStatus() async {
-    try {
-      // 擴展 Bridge 增加 getSystemStatus
-      final status = await BitchatBridge.getSystemStatus();
-      if (status != null) {
-        _handleStatusUpdate(status);
-      }
-    } catch (e) {
-      debugPrint('Error checking initial status: $e');
-    }
-  }
+  void _startListeningToSystemStatus() {
+    // 1. 先主動檢查一次初始狀態
+    BitchatBridge.getSystemStatus().then((status) {
+      if (status != null) _handleStatusUpdate(status);
+    });
 
-  void _listenToSystemStatus() {
+    // 2. 持續監聽來自原生端的狀態變更事件
     _statusSubscription = BitchatBridge.events().listen((event) {
       if (event['type'] == 'system_status') {
         _handleStatusUpdate(event);
@@ -78,11 +65,13 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   }
 
   void _handleStatusUpdate(Map<String, dynamic> status) {
+    // 從原生端傳回的 Map 中讀取藍牙狀態
     bool bluetoothEnabled = status['bluetoothEnabled'] ?? true;
 
     if (!bluetoothEnabled) {
       _showBluetoothEnableDialog();
     } else {
+      // 如果藍牙已開啟且對話框正開著，則自動關閉它
       if (_isBluetoothDialogOpen) {
         navigatorKey.currentState?.pop();
         _isBluetoothDialogOpen = false;
@@ -94,25 +83,37 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
     if (_isBluetoothDialogOpen) return;
 
     final context = navigatorKey.currentContext;
-    if (context == null) {
-      // 如果 context 還是 null，延遲一下再試
-      Future.delayed(const Duration(milliseconds: 500), _showBluetoothEnableDialog);
-      return;
-    }
+    if (context == null) return;
 
     _isBluetoothDialogOpen = true;
     showDialog(
       context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.bluetooth_disabled, color: Colors.redAccent),
-            SizedBox(width: 12),
-            Text('藍牙已關閉'),
+      barrierDismissible: false, // 強制使用者必須處理，不能點擊空白處取消
+      builder: (context) => PopScope(
+        canPop: false, // 禁用實體返回鍵取消
+        child: AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.bluetooth_disabled, color: Colors.redAccent, size: 28),
+              SizedBox(width: 12),
+              Text('藍牙未開啟', style: TextStyle(fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: const Text(
+            'Bitchat 需要藍牙功能才能建立 Mesh 網路並在無網路環境下傳送訊息。\n\n請前往系統設定開啟藍牙。',
+            style: TextStyle(fontSize: 15, height: 1.5),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                // 原生端通常會彈出系統權限請求，這裡提供一個了解按鈕
+                // 如果藍牙開啟了，_handleStatusUpdate 會自動關閉此 Dialog
+              },
+              child: const Text('了解'),
+            ),
           ],
         ),
-        content: const Text('Bitchat 需要藍牙功能才能建立 Mesh 網路並傳送訊息。請前往系統設定開啟藍牙。'),
       ),
     ).then((_) => _isBluetoothDialogOpen = false);
   }

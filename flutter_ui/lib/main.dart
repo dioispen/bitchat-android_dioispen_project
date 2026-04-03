@@ -70,11 +70,15 @@ class _BitchatFlutterUiAppState extends State<BitchatFlutterUiApp> {
   }
 
   void _listenToSystemStatus() {
-    _statusSubscription = BitchatBridge.events().listen((event) {
-      if (event['type'] == 'system_status') {
-        _handleStatusUpdate(event);
-      }
-    });
+    try {
+      _statusSubscription = BitchatBridge.events().listen((event) {
+        if (event['type'] == 'system_status') {
+          _handleStatusUpdate(event);
+        }
+      });
+    } catch (e) {
+      debugPrint('Bridge events not available on this platform: $e');
+    }
   }
 
   void _handleStatusUpdate(Map<String, dynamic> status) {

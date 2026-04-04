@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user.dart';
 import '../bridge/bitchat_bridge.dart';
-import 'register_screen.dart';
+import 'login_screen.dart';
 import 'home_screen.dart';
 
 class SetupScreen extends StatefulWidget {
@@ -59,6 +61,13 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       _statusText = '檢查必要權限與服務狀態...';
     });
 
+    // Web 平台跳過原生藍牙步驟，直接驗證登入狀態
+    if (kIsWeb) {
+      setState(() => _statusText = '驗證身分中...');
+      _checkRegistration();
+      return;
+    }
+
     // 1. 檢查權限
     bool hasPermissions = await BitchatBridge.checkPermissions();
     if (!hasPermissions) {
@@ -96,7 +105,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
           _nearbyPeers = peers;
         });
       }
-      
+
       // 搜尋滿 2 秒（即第一次 Tick）後，就開始執行註冊狀態檢查，不用等待太久
       if (timer.tick >= 1) {
         _checkRegistration();
@@ -118,22 +127,22 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
     bool hasLocalData = false;
 
     try {
-      // Step A: 檢查原生層密鑰
+      // Step A: 檢查原生層密鑰 或 Firebase Auth 登入狀態
       bool nativeRegistered = await BitchatBridge.isRegistered();
-      debugPrint('DEBUG: Native registration status: $nativeRegistered');
+      final firebaseUser = FirebaseAuth.instance.currentUser;
+      debugPrint('DEBUG: Native: $nativeRegistered, FirebaseUser: ${firebaseUser?.uid}');
 
-      if (nativeRegistered) {
+      if (nativeRegistered || firebaseUser != null) {
         // Step B: 檢查本地 SharedPreferences 資料
         final prefs = await SharedPreferences.getInstance();
         final userJson = prefs.getString('app_user');
-        
+
         if (userJson != null) {
           hasLocalData = true;
           final user = AppUser.fromJson(jsonDecode(userJson));
           debugPrint('DEBUG: Local user found: ${user.id}');
 
           // Step C: 比對 Cloud Firestore
-          // 設定超時，避免網路不穩時卡死
           final cloudDoc = await FirebaseFirestore.instance
               .collection('users')
               .doc(user.id)
@@ -143,17 +152,31 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
           if (cloudDoc.exists) {
             isRegisteredInCloud = true;
             debugPrint('DEBUG: Cloud registration verified.');
-          } else {
-            debugPrint('DEBUG: User ID ${user.id} not found in Firestore.');
+          }
+        } else if (firebaseUser != null) {
+          // Firebase Auth 有 session 但本地無資料，嘗試從 Firestore 還原
+          debugPrint('DEBUG: No local data, trying to restore from Firestore...');
+          final cloudDoc = await FirebaseFirestore.instance
+              .collection('users')
+              .doc(firebaseUser.uid)
+              .get()
+              .timeout(const Duration(seconds: 5));
+
+          if (cloudDoc.exists && cloudDoc.data() != null) {
+            final appUser = AppUser.fromJson(cloudDoc.data()!);
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString('app_user', jsonEncode(appUser.toJson()));
+            isRegisteredInCloud = true;
+            debugPrint('DEBUG: Restored user data from Firestore.');
           }
         }
       }
     } catch (e) {
       debugPrint('DEBUG: Registration check failed or timed out: $e');
-      // 如果是網路超時，但本地已有資料，我們採取寬鬆策略允許進入首頁 (離線模式)
+      // 網路超時但本地已有資料，允許離線模式
       if (hasLocalData) {
         debugPrint('DEBUG: Proceeding in offline mode with local data.');
-        isRegisteredInCloud = true; 
+        isRegisteredInCloud = true;
       }
     }
 
@@ -165,7 +188,7 @@ class _SetupScreenState extends State<SetupScreen> with WidgetsBindingObserver {
       } else {
         // 若完全沒有雲端紀錄且非離線寬鬆情況，導向註冊頁
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const RegisterScreen()),
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
         );
       }
     }

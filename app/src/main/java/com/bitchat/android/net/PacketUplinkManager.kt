@@ -56,22 +56,10 @@ class PacketUplinkManager(private val context: Context) {
             try {
                 val isHealthReport = packet.type == MessageType.HEALTH_REPORT.value
                 
-                // 如果是健康報告，則轉譯為 JSON 再上傳；其餘維持二進位格式
-                val (requestBody, mediaType) = if (isHealthReport) {
-                    val payloadObj = HealthReportPayload.decode(packet.payload)
-                    val jsonString = if (payloadObj != null) {
-                        gson.toJson(payloadObj)
-                    } else {
-                        // 若解碼失敗，嘗試直接作為字串處理（以防原始 payload 已是 JSON）
-                        String(packet.payload, Charsets.UTF_8)
-                    }
-                    jsonString.toRequestBody(MEDIA_TYPE_JSON) to MEDIA_TYPE_JSON
-                } else {
-                    val binaryData = packet.toBinaryData() ?: return@launch
-                    binaryData.toRequestBody(MEDIA_TYPE_OCTET_STREAM) to MEDIA_TYPE_OCTET_STREAM
-                }
+                // 所有格式都保持二進制傳輸
+                val requestBody = packet.payload.toRequestBody(MEDIA_TYPE_OCTET_STREAM)
                 
-                Log.d(TAG, " 正在上傳封包 (Type: ${packet.type}, Format: ${if (isHealthReport) "JSON" else "Binary"}) 至伺服器...")
+                Log.d(TAG, " 正在上傳封包 (Type: ${packet.type}, Format: Binary) 至伺服器...")
 
                 val request = Request.Builder()
                     .url(UPLINK_URL)

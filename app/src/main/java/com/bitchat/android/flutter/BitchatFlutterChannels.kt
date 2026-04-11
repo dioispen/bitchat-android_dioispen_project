@@ -60,17 +60,37 @@ class BitchatFlutterChannels(
 
         // 監聽來自 Mesh 的封包
         MeshServiceHolder.onPacketReceived = { packet: BitchatPacket ->
+            Log.d("BitchatBridge", "📨 收到封包，類型: ${packet.type} (HEALTH_REPORT=${MessageType.HEALTH_REPORT.value}), 大小: ${packet.payload.size}")
             if (packet.type == MessageType.HEALTH_REPORT.value) {
+                Log.d("BitchatBridge", "🎯 這是 HEALTH_REPORT，開始解碼...")
                 try {
-                    val payloadStr = String(packet.payload, Charsets.UTF_8)
-                    val reportMap = gson.fromJson(payloadStr, Map::class.java)
-                    emitEvent(mapOf(
-                        "type" to "health_report",
-                        "report" to reportMap,
-                        "senderId" to packet.senderID.toHexString()
-                    ))
+                    // 嘗試解碼二進制格式
+                    val report = com.bitchat.android.protocol.HealthReportPayload.decode(packet.payload)
+                    if (report != null) {
+                        Log.d("BitchatBridge", "✅ HEALTH_REPORT 解碼成功: ${report.name} (${report.status}), lat=${report.lat}, lng=${report.lng}")
+                        val reportMap = mapOf(
+                            "reporterId" to report.reporterId,
+                            "name" to report.name,
+                            "phone" to report.phone,
+                            "bloodType" to report.bloodType,
+                            "status" to report.status,
+                            "description" to report.description,
+                            "lat" to report.lat,
+                            "lng" to report.lng,
+                            "reportTime" to report.reportTime
+                        )
+                        Log.d("BitchatBridge", "📤 正在發送事件給 Flutter...")
+                        emitEvent(mapOf(
+                            "type" to "health_report",
+                            "report" to reportMap,
+                            "senderId" to packet.senderID.toHexString()
+                        ))
+                        Log.d("BitchatBridge", "✨ 事件已發送給 Flutter")
+                    } else {
+                        Log.w("BitchatBridge", "❌ 無法解碼健康報告封包 (二進制格式)")
+                    }
                 } catch (e: Exception) {
-                    Log.e("BitchatBridge", "Failed to parse health report packet", e)
+                    Log.e("BitchatBridge", "❌ 解析健康報告封包時出錯", e)
                 }
             }
         }
@@ -146,25 +166,36 @@ class BitchatFlutterChannels(
             }
 
             "sendHealthReport" -> {
+                Log.d("BitchatBridge", "🟢 sendHealthReport 被調用，參數類型: ${call.arguments?.javaClass?.simpleName}")
                 try {
-                    val reportMap = call.arguments as Map<*, *>
-                    val reportJson = gson.toJson(reportMap)
-                    val payload = reportJson.toByteArray(Charsets.UTF_8)
+                    // 期望接收二進制數據
+                    val payload = when (call.arguments) {
+                        is List<*> -> {
+                            // 如果 Flutter 發送的是 List<int>（二進制）
+                            (call.arguments as List<*>).filterIsInstance<Int>().map { it.toByte() }.toByteArray()
+                        }
+                        is Map<*, *> -> {
+                            // 如果仍然是 Map（JSON），則轉換為 HealthReportPayload 進行二進制編碼
+                            val reportMap = call.arguments as Map<*, *>
+                            val report = convertMapToHealthReportPayload(reportMap)
+                            if (report != null) {
+                                report.encode()
+                            } else {
+                                null
+                            }
+                        }
+                        else -> null
+                    }
                     
-                    val service = MeshServiceHolder.meshService
-                    if (service != null) {
-                        val publicKey = identityManager.loadStaticKey()?.second
-                        val senderIdHex = publicKey?.toHexString() ?: "0000000000000000"
-                        
-                        val packet = BitchatPacket(
-                            type = MessageType.HEALTH_REPORT.value,
-                            ttl = 3u,
-                            senderID = senderIdHex,
-                            payload = payload
-                        )
-                        
-                        service.sendMessage(String(payload, Charsets.UTF_8))
-                        uplinkManager.uplinkPacketIfNeeded(packet)
+                    if (payload == null) {
+                        Log.e("BitchatBridge", "❌ payload 為 null，無法編碼")
+                        result.error("INVALID_FORMAT", "Unsupported payload format", null)
+                        return@onMethodCall
+                    }
+                    Log.d("BitchatBridge", "✅ payload 編碼成功，大小: ${payload.size} 字節")
+                    
+                    val success = sendHealthReportPacket(payload)
+                    if (success) {
                         result.success(true)
                     } else {
                         result.error("SERVICE_NOT_READY", "Mesh service is not running", null)
@@ -205,6 +236,54 @@ class BitchatFlutterChannels(
     fun emitEvent(event: Map<String, Any?>) {
         activity?.runOnUiThread {
             eventSink?.success(event)
+        }
+    }
+
+    /**
+     * 發送 HEALTH_REPORT 類型的 BitchatPacket
+     * @param payload 已編碼的二進制健康報告數據
+     * @return 如果發送成功返回 true，否則返回 false
+     */
+    private fun sendHealthReportPacket(payload: ByteArray): Boolean {
+        val service = MeshServiceHolder.meshService
+        return if (service != null) {
+            val publicKey = identityManager.loadStaticKey()?.second
+            val senderIdHex = publicKey?.toHexString() ?: "0000000000000000"
+            
+            val packet = BitchatPacket(
+                type = MessageType.HEALTH_REPORT.value,
+                ttl = 3u,
+                senderID = senderIdHex,
+                payload = payload
+            )
+            Log.d("BitchatBridge", "🔄 正在發送 HEALTH_REPORT 封包，大小: ${payload.size}，類型: ${packet.type}, TTL: 3")
+            
+            // 通過 BluetoothMeshService 廣播 HEALTH_REPORT 封包
+            service.sendBroadcastPacket(packet)
+            uplinkManager.uplinkPacketIfNeeded(packet)
+            Log.d("BitchatBridge", "📤 HEALTH_REPORT 已提交給網格服務")
+            true
+        } else {
+            Log.e("BitchatBridge", "❌ Mesh 服務未啟動，無法發送 HEALTH_REPORT")
+            false
+        }
+    }
+
+    private fun convertMapToHealthReportPayload(map: Map<*, *>): com.bitchat.android.protocol.HealthReportPayload? {
+        return try {
+            com.bitchat.android.protocol.HealthReportPayload(
+                reporterId = map["reporterId"] as? String ?: return null,
+                name = map["name"] as? String ?: return null,
+                phone = map["phone"] as? String ?: return null,
+                bloodType = map["bloodType"] as? String,
+                status = map["status"] as? String ?: return null,
+                description = map["description"] as? String,
+                lat = (map["lat"] as? Number)?.toDouble(),
+                lng = (map["lng"] as? Number)?.toDouble(),
+                reportTime = map["reportTime"] as? String ?: return null
+            )
+        } catch (e: Exception) {
+            null
         }
     }
 

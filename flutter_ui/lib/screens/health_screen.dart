@@ -109,7 +109,9 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
     _tabController = TabController(length: 2, vsync: this);
     _loadUserAndPosition();
     _subscribeToTasks();
+    _loadBleTasks(); // 加載已保存的 BLE 任務
     _listenToBridge();
+    _loadTaskStatusOverrides(); // 加載保存的任務狀態
   }
 
   @override
@@ -122,23 +124,27 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
 
   void _listenToBridge() {
     _bridgeSubscription = BitchatBridge.events().listen((event) {
-      // 修正：檢查事件類型為 'bluetooth_packet' 且封包類型為 'health_report'
-      // 或是直接由 Bridge 轉發的 'disaster_report'
-      if (event['type'] == 'disaster_report' || event['type'] == 'bluetooth_packet') {
+      // 處理健康報告事件
+      if (event['type'] == 'health_report') {
+        // 安全的類型轉換：Kotlin 端發送的是 Map<Object?, Object?>
         Map<String, dynamic>? reportData;
-        
-        if (event['type'] == 'disaster_report') {
-          reportData = Map<String, dynamic>.from(event['report']);
-        } else if (event['packet'] != null && event['packet']['type'] == 1) { // 假設 1 是 Health Report
-          reportData = Map<String, dynamic>.from(event['packet']['data']);
+        if (event['report'] is Map) {
+          reportData = Map<String, dynamic>.from(event['report'] as Map);
         }
-
+        
         if (reportData != null) {
           final report = HealthReport.fromJson(reportData);
           if (report.reporterId == _currentUserId) return;
 
           setState(() {
             final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
+            
+            // 如果之前有相同使用者的已完成任務，復原為待急救狀態
+            final existingTaskId = 'ble_${report.reporterId}';
+            if (_taskStatusOverrides[existingTaskId] == TaskStatus.done && report.status != '安全') {
+              _taskStatusOverrides[existingTaskId] = TaskStatus.waiting;
+              _saveTaskStatusOverrides();
+            }
             
             double distanceKm = 0;
             if (report.lat != null && report.lng != null && _currentPosition != null) {
@@ -168,6 +174,126 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
               _bleTasks.add(newTask);
             }
           });
+          _saveBleTasksToPrefs(); // 保存 BLE 任務到 SharedPreferences
+        }
+      } else if (event['type'] == 'disaster_report' || event['type'] == 'bluetooth_packet') {
+        // 保留向後兼容性
+        Map<String, dynamic>? reportData;
+        
+        if (event['type'] == 'disaster_report') {
+          reportData = Map<String, dynamic>.from(event['report']);
+        } else if (event['packet'] != null && event['packet']['type'] == 1) { // 假設 1 是 Health Report
+          reportData = Map<String, dynamic>.from(event['packet']['data']);
+        }
+
+        if (reportData != null) {
+          final report = HealthReport.fromJson(reportData);
+          if (report.reporterId == _currentUserId) return;
+
+          setState(() {
+            final index = _bleTasks.indexWhere((t) => t.userId == report.reporterId);
+            
+            // 如果之前有相同使用者的已完成任務，復原為待急救狀態
+            final existingTaskId = 'ble_${report.reporterId}';
+            if (_taskStatusOverrides[existingTaskId] == TaskStatus.done && report.status != '安全') {
+              _taskStatusOverrides[existingTaskId] = TaskStatus.waiting;
+              _saveTaskStatusOverrides();
+            }
+            
+            double distanceKm = 0;
+            if (report.lat != null && report.lng != null && _currentPosition != null) {
+              final meters = Geolocator.distanceBetween(
+                _currentPosition!.latitude, _currentPosition!.longitude,
+                report.lat!, report.lng!,
+              );
+              distanceKm = meters / 1000;
+            }
+
+            final newTask = MutualAidTask(
+              id: 'ble_${report.reporterId}',
+              name: report.name,
+              userId: report.reporterId,
+              injury: report.status,
+              location: report.lat != null && report.lng != null
+                  ? '緯度 ${report.lat!.toStringAsFixed(4)}, 經度 ${report.lng!.toStringAsFixed(4)}'
+                  : '位置未提供',
+              distanceKm: double.parse(distanceKm.toStringAsFixed(1)),
+              note: report.description ?? '來自現場藍牙廣播',
+              isBle: true,
+            );
+
+            if (index >= 0) {
+              _bleTasks[index] = newTask;
+            } else {
+              _bleTasks.add(newTask);
+            }
+          });
+          _saveBleTasksToPrefs(); // 保存 BLE 任務到 SharedPreferences
+        }
+      }
+    });
+  }
+
+  Future<void> _loadTaskStatusOverrides() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('task_status_overrides');
+    if (saved != null) {
+      try {
+        final decoded = jsonDecode(saved) as Map<String, dynamic>;
+        setState(() {
+          _taskStatusOverrides.clear();
+          decoded.forEach((key, value) {
+            _taskStatusOverrides[key] = TaskStatus.values[value as int];
+          });
+        });
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _saveTaskStatusOverrides() async {
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = _taskStatusOverrides.map((key, value) => MapEntry(key, value.index));
+    await prefs.setString('task_status_overrides', jsonEncode(encoded));
+  }
+
+  Future<void> _saveBleTasksToPrefs() async {
+    // 將 BLE 任務序列化並保存到 SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    final serialized = _bleTasks.map((task) => jsonEncode({
+      'id': task.id,
+      'name': task.name,
+      'userId': task.userId,
+      'injury': task.injury,
+      'location': task.location,
+      'distanceKm': task.distanceKm,
+      'note': task.note,
+      'isBle': task.isBle,
+    })).toList();
+    await prefs.setStringList('ble_tasks', serialized);
+  }
+
+  Future<void> _loadBleTasks() async {
+    // 從 SharedPreferences 加載已保存的 BLE 任務
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('ble_tasks') ?? [];
+    
+    setState(() {
+      _bleTasks.clear();
+      for (final taskJson in saved) {
+        try {
+          final data = jsonDecode(taskJson) as Map<String, dynamic>;
+          _bleTasks.add(MutualAidTask(
+            id: data['id'] as String,
+            name: data['name'] as String,
+            userId: data['userId'] as String,
+            injury: data['injury'] as String,
+            location: data['location'] as String,
+            distanceKm: (data['distanceKm'] as num).toDouble(),
+            note: data['note'] as String,
+            isBle: data['isBle'] as bool? ?? true,
+          ));
+        } catch (e) {
+          print('Error loading BLE task: $e');
         }
       }
     });
@@ -329,9 +455,16 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
 
       final reportJson = report.toJson();
 
-      // 1. BLE 廣播 (受傷時)
+      // 1. BLE 廣播 (受傷時) - 使用二進制編碼
       if (status == '輕傷' || status == '重傷') {
-        await BitchatBridge.sendHealthReport(reportJson);
+        print('🚀 開始廣播健康報告...');
+        final binaryData = report.encodeToBytes();
+        print('📦 編碼後字節數: ${binaryData.length}, 前10字節: ${binaryData.take(10).toList()}');
+        print('📋 報告內容: reporterId=${report.reporterId}, name=${report.name}, status=$status, description=${report.description}');
+        await BitchatBridge.sendHealthReport(binaryData);
+        print('✅ sendHealthReport 已調用');
+      } else {
+        print('⏭️  跳過BLE廣播，因為狀態為: $status (只在輕傷或重傷時廣播)');
       }
 
       // 2. 上傳到 Firestore (使用 Auth UID 作為文件 ID 或子項)
@@ -389,6 +522,8 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
         injuryColor: _injuryColor(task.injury),
         onAccept: () {
           setState(() => _taskStatusOverrides[task.id] = TaskStatus.accepted);
+          _saveTaskStatusOverrides(); // 保存狀態修改
+          _saveBleTasksToPrefs(); // 保存任務列表
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -402,6 +537,8 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
         },
         onDone: () {
           setState(() => _taskStatusOverrides[task.id] = TaskStatus.done);
+          _saveTaskStatusOverrides(); // 保存狀態修改
+          _saveBleTasksToPrefs(); // 保存任務列表
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

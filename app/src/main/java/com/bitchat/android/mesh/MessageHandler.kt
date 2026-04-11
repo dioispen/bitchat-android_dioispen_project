@@ -487,13 +487,14 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
     /**
      * Handle structured health report
      */
-    private fun handleHealthReport(routed: RoutedPacket) {
+    suspend fun handleHealthReport(routed: RoutedPacket) {
         val packet = routed.packet
         val peerID = routed.peerID ?: "unknown"
 
+        Log.d(TAG, "🔍 收到健康報告封包，大小: ${packet.payload.size} 字節，來自: $peerID")
         val report = HealthReportPayload.decode(packet.payload)
         if (report != null) {
-            Log.d(TAG, "📢 Received Health Report from $peerID: Status=${report.status}, Msg=${report.description}")
+            Log.d(TAG, "📢 成功解碼健康報告 - 回報者: ${report.name}, 狀態: ${report.status}")
 
             // 1. Notify UI/Flutter
             val message = BitchatMessage(
@@ -510,6 +511,8 @@ class MessageHandler(private val myPeerID: String, private val appContext: andro
             
             // 3. 轉發給 Flutter EventChannel
             MeshServiceHolder.onPacketReceived?.invoke(packet)
+        } else {
+            Log.w(TAG, "❌ 無法解碼健康報告封包，原始大小: ${packet.payload.size}")
         }
     }
 

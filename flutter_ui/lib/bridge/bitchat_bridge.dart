@@ -99,10 +99,10 @@ class BitchatBridge {
     });
   }
 
-  /// 發送健康報告 (BLE 廣播 + 網路回報)
-  static Future<void> sendHealthReport(Map<String, dynamic> reportJson) async {
+  /// 發送健康報告 (BLE 廣播 + 網路回報) - 使用二進制編碼
+  static Future<void> sendHealthReport(List<int> binaryData) async {
     try {
-      await _method.invokeMethod<void>('sendHealthReport', reportJson);
+      await _method.invokeMethod<void>('sendHealthReport', binaryData);
     } catch (e) {
       // Ignore
     }

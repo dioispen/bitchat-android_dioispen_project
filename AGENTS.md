@@ -7,9 +7,11 @@ This document provides context, architectural insights, and development standard
 
 **Key Technologies:**
 - **Language:** Kotlin (JVM Target 1.8)
-- **UI Framework:** Jetpack Compose (Material 3)
+- **UI Framework:** Flutter (primary frontend)
+- **Backend UI:** Jetpack Compose (Material 3) for legacy components
 - **Asynchronous:** Kotlin Coroutines & Flow
-- **Networking:** Bluetooth Low Energy (BLE), Tor (Arti Rust bridge), OkHttp
+- **Networking:** Bluetooth Low Energy (BLE), OkHttp
+- **Database:** Google Firestore (authentication & health data)
 - **Architecture:** MVVM with Clean Architecture principles
 - **Build System:** Gradle (Kotlin DSL)
 
@@ -28,22 +30,25 @@ The application follows a clean architecture pattern, heavily modularized by fea
 | `noise/` | **Encryption**: Implementation of the Noise Protocol Framework for secure channels. |
 | `identity/` | **User Identity**: Management of user profiles and public/private keys. |
 | `features/` | **App Features**: Sub-modules for `voice`, `file`, and `media` handling. |
-| `nostr/` | **Relay Integration**: Logic for Nostr protocol integration and relay management. |
 | `geohash/` | **Location**: Utilities for location-based features and geohashing. |
 | `net/` | **Networking**: General network utilities and abstractions. |
 
 ## 3. Key Components
 
-### UI Layer (Jetpack Compose)
-- **Activity**: Single-Activity architecture (`MainActivity.kt`).
-- **Navigation**: Jetpack Compose Navigation.
-- **State Management**: `ViewModel` exposing `StateFlow` to Composables.
-- **Theme**: Custom theme definitions in `ui/theme`.
+### UI Layer
+- **Primary Framework**: Flutter (located in `flutter_ui/`) handles the main application UI and user-facing functionality.
+- **Legacy Components**: Jetpack Compose (Material 3) available for backend/legacy Android components.
+- **Flutter Features**: Registration/Login, health information packet upload, messaging interface.
+- **State Management**: ViewModel with StateFlow for Android components; Flutter Provider pattern for Flutter UI.
+- **Theme**: Custom theme definitions in both `ui/theme` (Android) and `flutter_ui/` (Flutter).
 
 ### Networking & Connectivity
 - **MeshForegroundService**: The critical component that keeps the mesh network alive. It manages the lifecycle of BLE scanning/advertising and other transport layers.
 - **BLE Stack**: Located in `mesh/` and `net/`, handles the intricacies of Android Bluetooth interactions.
-- **Tor/Arti**: Integrated via JNI (`jniLibs`) to provide anonymous internet routing where available.
+
+### Authentication & Data Management
+- **Firestore Integration**: Used for user registration/login and health information packet storage. Provides secure cloud-based authentication and data persistence.
+- **Health Data Upload**: Integrated with Firestore for secure transmission and storage of health information packets from Flutter UI.
 
 ## 4. Development Standards
 
@@ -72,11 +77,3 @@ The application follows a clean architecture pattern, heavily modularized by fea
 
 ---
 *Note: This file is intended to assist AI agents in navigating and modifying the codebase efficiently. Always verify context by reading the actual files before making changes.*
-
-# AGENTS.md 更新摘要
-- 移除 Networking 中的 Tor (Arti Rust bridge)
-- 移除 Directory Structure 中的 `nostr/`說明
-- 簡化組件說明，專注於 BLE Mesh 與 OkHttp 傳輸
-
-# flutter_ui/
-- 此專案之ui改用flutter之此目錄

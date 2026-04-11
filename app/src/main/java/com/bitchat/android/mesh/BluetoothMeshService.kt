@@ -556,6 +556,16 @@ class BluetoothMeshService(private val context: Context) {
                 val req = RequestSyncPacket.decode(routed.packet.payload) ?: return
                 gossipSyncManager.handleRequestSync(fromPeer, req)
             }
+
+            override fun handleHealthReport(routed: RoutedPacket) {
+                serviceScope.launch { 
+                    messageHandler.handleHealthReport(routed)
+                    // Track broadcast health reports for sync
+                    try { 
+                        gossipSyncManager.onPublicPacketSeen(routed.packet) 
+                    } catch (_: Exception) { }
+                }
+            }
         }
         
         // BluetoothConnectionManager delegates
@@ -1023,6 +1033,24 @@ class BluetoothMeshService(private val context: Context) {
                 Log.d(TAG, "📤 Sent $label to $recipientPeerID (${payload.data.size} bytes)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send $label to $recipientPeerID: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 發送廣播 Packet（通用方法）
+     * 用於發送任何類型的 Packet（如 HEALTH_REPORT、MESSAGE 等）
+     */
+    fun sendBroadcastPacket(packet: BitchatPacket) {
+        serviceScope.launch {
+            try {
+                val signedPacket = signPacketBeforeBroadcast(packet)
+                connectionManager.broadcastPacket(RoutedPacket(signedPacket))
+                // 追蹤公開 packet 以進行同步
+                try { gossipSyncManager.onPublicPacketSeen(signedPacket) } catch (_: Exception) { }
+                Log.d(TAG, "✅ 廣播 Packet 成功: type=${packet.type}, payload size=${packet.payload.size}")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ 廣播 Packet 失敗: ${e.message}", e)
             }
         }
     }

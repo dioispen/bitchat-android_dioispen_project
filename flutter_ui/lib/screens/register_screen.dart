@@ -1,14 +1,9 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user.dart';
 import '../services/auth_service.dart';
-import 'home_screen.dart';
-
-const _prefsKeyUser = 'app_user';
+import 'verify_email_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -102,7 +97,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
         throw Exception('帳號註冊失敗，請稍後再試');
       }
 
-      // 2. 建立 AppUser 物件 (使用 Firebase UID 作為 ID)
+      // 2. 寄出信箱驗證信
+      await FirebaseAuth.instance.currentUser?.sendEmailVerification();
+
+      // 3. 建立 AppUser 物件（暫存，驗證後才寫入 Firestore）
       final user = AppUser(
         id: userModel.uid,
         email: userModel.email,
@@ -117,19 +115,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         registeredAt: DateTime.now(),
       );
 
-      // 3. 存到本機
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_prefsKeyUser, jsonEncode(user.toJson()));
-
-      // 4. 存到 Firestore 雲端
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.id)
-          .set(user.toJson());
-
       if (mounted) {
         Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
+          MaterialPageRoute(builder: (_) => VerifyEmailScreen(pendingUser: user)),
         );
       }
     } catch (e) {

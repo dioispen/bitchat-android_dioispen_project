@@ -4,7 +4,9 @@
       "Bash(flutter devices:*)",
       "Bash(flutter emulators:*)",
       "Bash(flutter run:*)",
-      "Bash(flutter create:*)"
+      "Bash(flutter create:*)",
+      "Bash(xcode-select -p)",
+      "Bash(xcodebuild -version)"
     ]
   }
 }

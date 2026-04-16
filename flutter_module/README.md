@@ -1,4 +1,4 @@
-# flutter_ui
+# flutter_module
 
 A new Flutter module project.
 

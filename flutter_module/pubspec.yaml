@@ -1,4 +1,4 @@
-name: flutter_ui
+name: flutter_module
 description: "A new Flutter module project."
 
 # The following defines the version and build number for your application.
@@ -28,7 +28,7 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
   connectivity_plus: ^6.0.3
-  shared_preferences: ^2.3.2
+  shared_preferences: ^2.5.0
   url_launcher: ^6.3.0
   geolocator: ^13.0.2
   flutter_map: ^7.0.2
@@ -88,3 +88,13 @@ flutter:
   # see https://flutter.dev/to/font-from-package
 
 
+  # This section identifies your Flutter project as a module meant for
+  # embedding in a native host app.  These identifiers should _not_ ordinarily
+  # be changed after generation - they are used to ensure that the tooling can
+  # maintain consistency when adding or modifying assets and plugins.
+  # They also do not have any bearing on your native host application's
+  # identifiers, which may be completely independent or the same as these.
+  module:
+    androidX: true
+    androidPackage: com.disaster.flutter_module
+    iosBundleIdentifier: com.disaster.flutterModule

@@ -26,5 +26,5 @@ include(":app")
 setBinding(new Binding([gradle: this]))
 evaluate(new File(
 settingsDir.parentFile,
-rootProject.name + '/flutter_ui/.android/include_flutter.groovy'
+rootProject.name + '/flutter_module/.android/include_flutter.groovy'
 ))

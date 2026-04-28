@@ -10,6 +10,7 @@ import 'sos_screen.dart';
 import 'health_screen.dart';
 import 'chat_screen.dart';
 import 'login_screen.dart';
+import 'supply_screen.dart';
 
 const _prefsKeyUser = 'app_user';
 
@@ -53,76 +54,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // 目前狀態：0=安全, 1=需要協助, 2=緊急
-  int _statusIndex = 0;
-
-  static const _statusOptions = [
-    {'label': '安全',    'color': Color(0xFF7AA67A), 'dotColor': Color(0xFF7AA67A), 'textColor': Color(0xFF4A7A4A), 'icon': Icons.check_circle_outline},
-    {'label': '需要協助', 'color': Color(0xFFD4945A), 'dotColor': Color(0xFFD4945A), 'textColor': Color(0xFF8B4A00), 'icon': Icons.pan_tool_alt_outlined},
-    {'label': '緊急',    'color': Color(0xFFC4553A), 'dotColor': Color(0xFFC4553A), 'textColor': Color(0xFFB52A10), 'icon': Icons.warning_amber_rounded},
-  ];
-
-  void _showStatusPicker() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-        decoration: const BoxDecoration(
-          color: Color(0xFFFEFDF9),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 36, height: 4,
-                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)),
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text('更新目前狀態', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: Color(0xFF3D2C1E))),
-            const SizedBox(height: 16),
-            ..._statusOptions.asMap().entries.map((e) {
-              final i = e.key;
-              final opt = e.value;
-              final isSelected = _statusIndex == i;
-              return GestureDetector(
-                onTap: () {
-                  setState(() => _statusIndex = i);
-                  Navigator.pop(context);
-                },
-                child: Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: isSelected ? (opt['color'] as Color).withValues(alpha: 0.12) : Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: isSelected ? (opt['color'] as Color) : Colors.grey.shade200,
-                      width: isSelected ? 1.5 : 1,
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(opt['icon'] as IconData, color: opt['color'] as Color, size: 22),
-                      const SizedBox(width: 12),
-                      Text(opt['label'] as String,
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: opt['textColor'] as Color)),
-                      if (isSelected) ...[const Spacer(), Icon(Icons.check, color: opt['color'] as Color, size: 18)],
-                    ],
-                  ),
-                ),
-              );
-            }),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final features = [
@@ -153,6 +84,13 @@ class _HomeScreenState extends State<HomeScreen> {
         'icon': Icons.chat_bubble_rounded,
         'color': const Color(0xFF9B88B3),
         'screen': const ChatScreen(),
+      },
+      {
+        'title': '物資捐贈',
+        'sub': '認領需求物資',
+        'icon': Icons.volunteer_activism_rounded,
+        'color': const Color(0xFF7AA67A),
+        'screen': const SupplyScreen(),
       },
     ];
 
@@ -215,50 +153,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     Text(
                       '做好準備，守護自己與家人',
                       style: TextStyle(fontSize: 14, color: _textSecondary),
-                    ),
-                    const SizedBox(height: 16),
-                    // 狀態橫幅（可點擊）
-                    GestureDetector(
-                      onTap: _showStatusPicker,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                        decoration: BoxDecoration(
-                          color: (_statusOptions[_statusIndex]['color'] as Color).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: (_statusOptions[_statusIndex]['color'] as Color).withValues(alpha: 0.4),
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: _statusOptions[_statusIndex]['dotColor'] as Color,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            Text(
-                              '目前狀態：${_statusOptions[_statusIndex]['label']}',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: _statusOptions[_statusIndex]['textColor'] as Color,
-                              ),
-                            ),
-                            const Spacer(),
-                            Text(
-                              '更新狀態 →',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: (_statusOptions[_statusIndex]['color'] as Color).withValues(alpha: 0.8),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     ),
                   ],
                 ),

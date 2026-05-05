@@ -20,19 +20,27 @@ class _ChatScreenState extends State<ChatScreen> {
   static const _accent = Color(0xFF9B88B3);
 
   final List<Message> _messages = [
-    Message('系統', '歡迎進入防災聊天室，請保持冷靜、互助合作。', DateTime.now()),
-    Message('志工A', '大家好，我在埔里火車站附近，這裡情況穩定。', DateTime.now()),
-    Message('志工B', '南投縣政府已開放避難中心，地址：南投市中興新村。', DateTime.now()),
+    Message(sender: '系統', text: '歡迎進入防災聊天室，請保持冷靜、互助合作。', time: DateTime.now()),
+    Message(sender: '志工A', text: '大家好，我在埔里火車站附近，這裡情況穩定。', time: DateTime.now()),
+    Message(sender: '志工B', text: '南投縣政府已開放避難中心，地址：南投市中興新村。', time: DateTime.now()),
   ];
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   void _sendMessage() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
     setState(() {
-      _messages.add(Message(_currentUser, text, DateTime.now()));
+      _messages.add(Message(sender: _currentUser, text: text, time: DateTime.now()));
       _controller.clear();
     });
     Future.delayed(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
         duration: const Duration(milliseconds: 250),

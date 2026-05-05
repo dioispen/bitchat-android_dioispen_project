@@ -1,21 +1,26 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 class SOSService {
-
-  void sendSOS(String userId, double lat, double lng) {
-    print("SOS 發送");
-
-    Map<String, dynamic> sosData = {
-      "userId": userId,
-      "latitude": lat,
-      "longitude": lng,
-      "timestamp": DateTime.now().toString()
-    };
-
-    print(sosData);
-
-    // 未來可以
-    // API 發送
-    // BLE 發送
-    // P2P Mesh
+  Future<String> sendSOS({
+    required String userId,
+    required String userName,
+    required String phone,
+    required double lat,
+    required double lng,
+    String? bloodType,
+    String? medicalInfo,
+  }) async {
+    final doc = await FirebaseFirestore.instance.collection('sos_requests').add({
+      'userId': userId,
+      'userName': userName,
+      'phone': phone,
+      'latitude': lat,
+      'longitude': lng,
+      'bloodType': bloodType,
+      'medicalInfo': medicalInfo,
+      'status': 'active',
+      'sentAt': FieldValue.serverTimestamp(),
+    });
+    return doc.id;
   }
-
 }

@@ -1,7 +1,5 @@
-import 'dart:math';
-
 class AppUser {
-  final String id;                       // Firebase Auth UID
+  final String id;                       // Firebase Auth UID（全域唯一，由 Firebase 管理）
   final String? email;                   // 電子郵件
   final String name;                     // 姓名
   final String phone;                    // 手機號碼
@@ -9,8 +7,8 @@ class AppUser {
   final String emergencyContactName;     // 緊急聯絡人姓名
   final String emergencyContactPhone;    // 緊急聯絡人電話
   final String emergencyContactRelation; // 與緊急聯絡人關係
-  final String? bloodType;              // 血型（可選）
-  final String? medicalInfo;            // 慢性病 / 藥物過敏（可選）
+  final String? bloodType;               // 血型（可選）
+  final String? medicalInfo;             // 慢性病 / 藥物過敏（可選）
   final DateTime registeredAt;           // 註冊時間
 
   AppUser({

@@ -1,5 +1,5 @@
 class UserModel {
-  final String uid;
+  final String uid;    // Firebase Auth UID（全域唯一，由 Firebase 管理）
   final String? email;
 
   UserModel({required this.uid, this.email});

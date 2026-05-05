@@ -58,6 +58,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final features = [
       {
+        'title': 'SOS 緊急求救',
+        'sub': '發送求救訊號',
+        'icon': Icons.sos_rounded,
+        'color': const Color(0xFFC4553A),
+        'screen': const SOSScreen(),
+      },
+      {
         'title': '防災知識',
         'sub': '學習應急技能',
         'icon': Icons.auto_stories_rounded,
@@ -260,55 +267,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            // SOS 按鈕
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                child: GestureDetector(
-                  onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SOSScreen()),
-                  ),
-                  child: Container(
-                    height: 68,
-                    decoration: BoxDecoration(
-                      color: _sosRed,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _sosRed.withValues(alpha: 0.35),
-                          blurRadius: 16,
-                          offset: const Offset(0, 6),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: const Icon(Icons.sos_rounded, color: Colors.white, size: 26),
-                        ),
-                        const SizedBox(width: 12),
-                        const Text(
-                          'SOS  緊急求救',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
           ],
         ),
       ),

@@ -1,4 +1,8 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/user.dart';
 import '../services/sos_service.dart';
 
 class SOSScreen extends StatefulWidget {
@@ -10,7 +14,6 @@ class SOSScreen extends StatefulWidget {
 
 class _SOSScreenState extends State<SOSScreen> {
   final SOSService _sosService = SOSService();
-  bool _sosSent = false;
 
   static const _bg = Color(0xFFF7F3EC);
   static const _card = Color(0xFFFEFDF9);
@@ -18,9 +21,100 @@ class _SOSScreenState extends State<SOSScreen> {
   static const _textSecondary = Color(0xFF8C7B6E);
   static const _sosRed = Color(0xFFC4553A);
 
-  void _sendSOS() {
-    _sosService.sendSOS('user_001', 23.964, 120.967);
-    setState(() => _sosSent = true);
+  AppUser? _currentUser;
+  Position? _position;
+  bool _sosSent = false;
+  bool _isSending = false;
+  bool _isLoadingLocation = true;
+  DateTime? _sentAt;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUser();
+    _fetchLocation();
+  }
+
+  Future<void> _loadUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('app_user');
+    if (raw != null && mounted) {
+      setState(() => _currentUser = AppUser.fromJson(jsonDecode(raw)));
+    }
+  }
+
+  Future<void> _fetchLocation() async {
+    setState(() => _isLoadingLocation = true);
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        setState(() => _isLoadingLocation = false);
+        return;
+      }
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.deniedForever ||
+          permission == LocationPermission.denied) {
+        setState(() => _isLoadingLocation = false);
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      if (mounted) setState(() => _position = pos);
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _isLoadingLocation = false);
+    }
+  }
+
+  Future<void> _sendSOS() async {
+    if (_currentUser == null || _isSending) return;
+    setState(() => _isSending = true);
+    try {
+      final lat = _position?.latitude ?? 0.0;
+      final lng = _position?.longitude ?? 0.0;
+      await _sosService.sendSOS(
+        userId: _currentUser!.id,
+        userName: _currentUser!.name,
+        phone: _currentUser!.phone,
+        lat: lat,
+        lng: lng,
+        bloodType: _currentUser!.bloodType,
+        medicalInfo: _currentUser!.medicalInfo,
+      );
+      if (mounted) {
+        setState(() {
+          _sosSent = true;
+          _sentAt = DateTime.now();
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('發送失敗：$e'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: _sosRed,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+  }
+
+  String get _locationText {
+    if (_isLoadingLocation) return '取得位置中…';
+    if (_position == null) return '無法取得位置';
+    return '${_position!.latitude.toStringAsFixed(4)}, ${_position!.longitude.toStringAsFixed(4)}';
+  }
+
+  String get _sentTimeText {
+    if (!_sosSent || _sentAt == null) return '尚未發送';
+    return '${_sentAt!.hour.toString().padLeft(2, '0')}:${_sentAt!.minute.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -63,7 +157,7 @@ class _SOSScreenState extends State<SOSScreen> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        _sosSent ? 'SOS 已發送，請保持冷靜等待救援。' : '長按下方按鈕發出求救訊號',
+                        _sosSent ? 'SOS 已發送，請保持冷靜等待救援。' : '點擊下方按鈕發出求救訊號',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w500,
@@ -79,7 +173,7 @@ class _SOSScreenState extends State<SOSScreen> {
 
               // SOS 大圓按鈕
               GestureDetector(
-                onTap: _sosSent ? null : _sendSOS,
+                onTap: _sosSent || _isSending ? null : _sendSOS,
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 400),
                   width: 200,
@@ -89,7 +183,8 @@ class _SOSScreenState extends State<SOSScreen> {
                     color: _sosSent ? const Color(0xFF9E9690) : _sosRed,
                     boxShadow: [
                       BoxShadow(
-                        color: (_sosSent ? const Color(0xFF9E9690) : _sosRed).withValues(alpha: 0.35),
+                        color: (_sosSent ? const Color(0xFF9E9690) : _sosRed)
+                            .withValues(alpha: 0.35),
                         blurRadius: 36,
                         spreadRadius: 6,
                       ),
@@ -98,7 +193,6 @@ class _SOSScreenState extends State<SOSScreen> {
                   child: Stack(
                     alignment: Alignment.center,
                     children: [
-                      // 外圈裝飾
                       Container(
                         width: 180,
                         height: 180,
@@ -110,26 +204,28 @@ class _SOSScreenState extends State<SOSScreen> {
                           ),
                         ),
                       ),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _sosSent ? Icons.check_rounded : Icons.sos_rounded,
-                            color: Colors.white,
-                            size: 52,
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _sosSent ? '已發送' : 'SOS',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 3,
+                      _isSending
+                          ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 3)
+                          : Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _sosSent ? Icons.check_rounded : Icons.sos_rounded,
+                                  color: Colors.white,
+                                  size: 52,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _sosSent ? '已發送' : 'SOS',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 22,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 3,
+                                  ),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
-                      ),
                     ],
                   ),
                 ),
@@ -137,7 +233,7 @@ class _SOSScreenState extends State<SOSScreen> {
 
               const Spacer(),
 
-              // 位置 & 電話資訊卡
+              // 位置 & 用戶資訊卡
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
@@ -154,11 +250,13 @@ class _SOSScreenState extends State<SOSScreen> {
                 ),
                 child: Column(
                   children: [
-                    _infoRow(Icons.location_on_rounded, '目前位置', '埔里鎮（23.964, 120.967）'),
+                    _infoRow(Icons.person_rounded, '姓名', _currentUser?.name ?? '載入中…'),
+                    const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                    _infoRow(Icons.location_on_rounded, '目前位置', _locationText),
                     const Divider(height: 20, color: Color(0xFFE8E0D5)),
                     _infoRow(Icons.phone_rounded, '緊急電話', '119 消防 ／ 110 警察'),
                     const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                    _infoRow(Icons.access_time_rounded, '發送時間', _sosSent ? _nowString() : '尚未發送'),
+                    _infoRow(Icons.access_time_rounded, '發送時間', _sentTimeText),
                   ],
                 ),
               ),
@@ -169,7 +267,10 @@ class _SOSScreenState extends State<SOSScreen> {
                 SizedBox(
                   width: double.infinity,
                   child: TextButton(
-                    onPressed: () => setState(() => _sosSent = false),
+                    onPressed: () => setState(() {
+                      _sosSent = false;
+                      _sentAt = null;
+                    }),
                     child: Text('重置', style: TextStyle(color: _textSecondary)),
                   ),
                 ),
@@ -187,13 +288,10 @@ class _SOSScreenState extends State<SOSScreen> {
         const SizedBox(width: 10),
         Text(label, style: const TextStyle(fontSize: 13, color: _textSecondary)),
         const Spacer(),
-        Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: _textPrimary)),
+        Text(value,
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: _textPrimary)),
       ],
     );
-  }
-
-  String _nowString() {
-    final now = DateTime.now();
-    return '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
   }
 }

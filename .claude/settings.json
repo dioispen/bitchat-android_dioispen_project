@@ -16,7 +16,11 @@
       "WebFetch(domain:api.github.com)",
       "Bash(flutter pub *)",
       "Bash(jobs)",
-      "Bash(code /Users/penny/Desktop/bitchat-android_dioispen_project)"
+      "Bash(code /Users/penny/Desktop/bitchat-android_dioispen_project)",
+      "Bash(open \"http://localhost:64077\")",
+      "Bash(open -a \"Google Chrome\" \"http://localhost:64077\")",
+      "Bash(kill 6222)",
+      "Bash(pkill -f \"flutter run\")"
     ]
   }
 }

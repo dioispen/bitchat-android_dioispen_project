@@ -61,7 +61,9 @@ class _SOSScreenState extends State<SOSScreen> {
         return;
       }
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       if (mounted) setState(() => _position = pos);
     } catch (_) {
@@ -135,7 +137,10 @@ class _SOSScreenState extends State<SOSScreen> {
               AnimatedContainer(
                 duration: const Duration(milliseconds: 400),
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
                 decoration: BoxDecoration(
                   color: _sosSent
                       ? const Color(0xFF7AA67A).withValues(alpha: 0.1)
@@ -150,7 +155,9 @@ class _SOSScreenState extends State<SOSScreen> {
                 child: Row(
                   children: [
                     Icon(
-                      _sosSent ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                      _sosSent
+                          ? Icons.check_circle_rounded
+                          : Icons.info_outline_rounded,
                       color: _sosSent ? const Color(0xFF7AA67A) : _sosRed,
                       size: 20,
                     ),
@@ -205,12 +212,17 @@ class _SOSScreenState extends State<SOSScreen> {
                         ),
                       ),
                       _isSending
-                          ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 3)
+                          ? const CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 3,
+                            )
                           : Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
                                 Icon(
-                                  _sosSent ? Icons.check_rounded : Icons.sos_rounded,
+                                  _sosSent
+                                      ? Icons.check_rounded
+                                      : Icons.sos_rounded,
                                   color: Colors.white,
                                   size: 52,
                                 ),
@@ -234,50 +246,68 @@ class _SOSScreenState extends State<SOSScreen> {
               const Spacer(),
 
               // 位置 & 用戶資訊卡
-              Padding(
-                padding: const EdgeInsets.only(right: 100),
-                child: Column(
-                  children: [
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: _card,
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(0xFF3D2C1E).withValues(alpha: 0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          _infoRow(Icons.person_rounded, '姓名', _currentUser?.name ?? '載入中…'),
-                          const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                          _infoRow(Icons.location_on_rounded, '目前位置', _locationText),
-                          const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                          _infoRow(Icons.phone_rounded, '緊急電話', '119 消防 ／ 110 警察'),
-                          const Divider(height: 20, color: Color(0xFFE8E0D5)),
-                          _infoRow(Icons.access_time_rounded, '發送時間', _sentTimeText),
-                        ],
-                      ),
+              Column(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _card,
+                      borderRadius: BorderRadius.circular(18),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(
+                            0xFF3D2C1E,
+                          ).withValues(alpha: 0.05),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    if (_sosSent)
-                      SizedBox(
-                        width: double.infinity,
-                        child: TextButton(
-                          onPressed: () => setState(() {
-                            _sosSent = false;
-                            _sentAt = null;
-                          }),
-                          child: Text('重置', style: TextStyle(color: _textSecondary)),
+                    child: Column(
+                      children: [
+                        _infoRow(
+                          Icons.person_rounded,
+                          '姓名',
+                          _currentUser?.name ?? '載入中…',
+                        ),
+                        const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                        _infoRow(
+                          Icons.location_on_rounded,
+                          '目前位置',
+                          _locationText,
+                        ),
+                        const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                        _infoRow(
+                          Icons.phone_rounded,
+                          '緊急電話',
+                          '119 消防 ／ 110 警察',
+                        ),
+                        const Divider(height: 20, color: Color(0xFFE8E0D5)),
+                        _infoRow(
+                          Icons.access_time_rounded,
+                          '發送時間',
+                          _sentTimeText,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (_sosSent)
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton(
+                        onPressed: () => setState(() {
+                          _sosSent = false;
+                          _sentAt = null;
+                        }),
+                        child: Text(
+                          '重置',
+                          style: TextStyle(color: _textSecondary),
                         ),
                       ),
-                  ],
-                ),
+                    ),
+                ],
               ),
             ],
           ),
@@ -291,11 +321,19 @@ class _SOSScreenState extends State<SOSScreen> {
       children: [
         Icon(icon, size: 18, color: _textSecondary),
         const SizedBox(width: 10),
-        Text(label, style: const TextStyle(fontSize: 13, color: _textSecondary)),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, color: _textSecondary),
+        ),
         const Spacer(),
-        Text(value,
-            style: const TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: _textPrimary)),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: _textPrimary,
+          ),
+        ),
       ],
     );
   }

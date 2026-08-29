@@ -1,0 +1,65 @@
+rules_version = '2';
+
+// CARES Mesh — Firestore 安全規則
+// 設計原則：預設全部拒絕；一律需登入；個人資料只限本人；
+//           救援類回報允許登入者跨用戶讀取，但不得竄改/刪除他人記錄。
+// 參考存取點：flutter_ui/lib/services/*.dart、flutter_ui/lib/screens/*.dart
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 是否為已登入（通過 Firebase Auth）的使用者
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // ── 使用者個人資料 ──────────────────────────────
+    // doc id 即 Firebase uid（見 register_screen.dart：AppUser.id = userModel.uid）
+    // 內含電話、緊急聯絡人、血型、病史等 PII → 只有本人可讀寫
+    match /users/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ── SOS 求救 ───────────────────────────────────
+    // 救援者需讀取所有求救 → 登入者皆可讀、可建立；
+    // 只有原求救者可更新/刪除自己的記錄（欄位 userId，見 sos_service.dart）
+    match /sos_requests/{docId} {
+      allow read, create: if signedIn();
+      allow update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ── 健康回報 ───────────────────────────────────
+    // 救援者需跨用戶讀取傷患回報（health_screen 依 status 篩選）→ 登入者皆可讀、可建立；
+    // 只有回報者可更新/刪除自己的記錄（欄位 reporterId）
+    match /health_reports/{docId} {
+      allow read, create: if signedIn();
+      allow update, delete: if signedIn() && resource.data.reporterId == request.auth.uid;
+    }
+
+    // ── 物資需求申請 ───────────────────────────────
+    match /supply_requests/{docId} {
+      allow read, create: if signedIn();
+      allow update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ── 物資認領 ───────────────────────────────────
+    match /supply_pledges/{docId} {
+      allow read, create: if signedIn();
+      allow update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // ── 物資品項（共用需求清單）───────────────────
+    // App 需寫入以做「首次種子」與更新已申請/已認領計數
+    // （supply_screen.dart 的 batch.update totalRequestedQty / totalPledgedQty）
+    // → 登入者可讀、可建立/更新；禁止刪除（避免整份清單被清空）
+    match /supply_items/{docId} {
+      allow read: if signedIn();
+      allow create, update: if signedIn();
+      allow delete: if false;
+    }
+
+    // ── 其餘一律拒絕（預設行為，明示以策安全）──────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
